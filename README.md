@@ -182,14 +182,25 @@ POST `http://localhost:8000/jobs/` with JSON body:
 
 Then query:
 
+- `GET /jobs/` — list all jobs
 - `GET /jobs/{job_id}` — job metadata
 - `GET /jobs/{job_id}/runs` — run history
 - `GET /overview/jobs` — aggregate stats + last run details/log tails for every job
 - `PUT /jobs/{job_id}` — update job configuration/executor
+- `PATCH /jobs/{job_id}` — partially update job (same as PUT)
+- `DELETE /jobs/{job_id}` — delete job definition (preserves history)
 - `POST /jobs/{job_id}/validate` or `/jobs/validate` — dry-run validation
 - `POST /jobs/{job_id}/run` — enqueue a manual run immediately, regardless of schedule
+- `POST /jobs/{job_id}/pause` — pause a scheduled job (disable schedule)
+- `POST /jobs/{job_id}/resume` — resume a paused job (re-enable schedule)
 - `POST /jobs/adhoc` — create + run a one-off job (schedule forced to immediate, disabled after dispatch)
-- `GET /workers/` — workers
+- `POST /jobs/bulk` — create multiple jobs in a single request (max 100)
+- `GET /workers/` — list all workers
+- `GET /workers/{worker_id}` — get specific worker details
+- `GET /runs/` — list all runs with filtering (`?job_id=...&status=...&limit=...&skip=...`)
+- `GET /runs/{run_id}` — get specific run details
+- `DELETE /runs/{run_id}` — delete a run from history
+- `GET /stats/overview` — system-wide statistics across all domains
 - `GET /events/stream` — real-time scheduler events (SSE)
 - `GET /health` — scheduler health
 
