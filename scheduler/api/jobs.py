@@ -158,6 +158,61 @@ def submit_job(job: JobCreate, request: Request):
     return job_def
 
 
+@router.post("/jobs/bulk", response_model=List[JobDefinition])
+def submit_jobs_bulk(jobs: List[JobCreate], request: Request):
+    """
+    Create multiple jobs in a single request.
+    Returns list of created job definitions.
+    Partial failures will stop processing and return an error with index.
+    """
+    db = get_db()
+    domain = getattr(request.state, "domain", "prod")
+    
+    if not jobs:
+        raise HTTPException(status_code=400, detail="empty jobs list")
+    
+    if len(jobs) > 100:
+        raise HTTPException(status_code=400, detail="bulk limit is 100 jobs per request")
+    
+    created_jobs = []
+    for idx, job in enumerate(jobs):
+        try:
+            job_def = JobDefinition(**job.model_dump(), domain=domain)
+            validation = _validate_job_definition(job_def)
+            if not validation.valid:
+                raise HTTPException(
+                    status_code=422, 
+                    detail=f"Job at index {idx} ({job.name}): {', '.join(validation.errors)}"
+                )
+            job_def = _attach_schedule(job_def, force=True)
+            db.job_definitions.insert_one(job_def.to_mongo())
+            
+            if job_def.schedule.mode == "immediate":
+                _enqueue_job(job_def.id, reason="bulk_submit", priority=job_def.priority, domain=domain)
+            
+            event_bus.publish(
+                "job_submitted",
+                {
+                    "job_id": job_def.id,
+                    "name": job_def.name,
+                    "user": job_def.user,
+                    "domain": job_def.domain,
+                    "schedule_mode": job_def.schedule.mode,
+                    "bulk": True,
+                },
+            )
+            created_jobs.append(job_def)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to create job at index {idx} ({job.name}): {str(e)}"
+            )
+    
+    return created_jobs
+
+
 @router.get("/jobs/{job_id}", response_model=JobDefinition)
 def get_job(job_id: str, request: Request):
     db = get_db()
@@ -208,6 +263,14 @@ def update_job(job_id: str, updates: JobUpdate, request: Request):
     db.job_definitions.replace_one({"_id": job_id}, job_def.to_mongo())
     event_bus.publish("job_updated", {"job_id": job_id, "domain": job_def.domain})
     return job_def
+
+
+@router.patch("/jobs/{job_id}", response_model=JobDefinition)
+def patch_job(job_id: str, updates: JobUpdate, request: Request):
+    """
+    Partially update a job definition (same as PUT, kept for RESTful completeness).
+    """
+    return update_job(job_id, updates, request)
 
 
 @router.post("/jobs/{job_id}/validate", response_model=JobValidationResult)
@@ -306,6 +369,78 @@ def jobs_overview(request: Request):
     return overview
 
 
+@router.get("/stats/overview")
+def stats_overview(request: Request):
+    """
+    Get system-wide statistics including jobs, runs, workers, and queue metrics.
+    """
+    db = get_db()
+    r = get_redis()
+    domain = getattr(request.state, "domain", "prod")
+    is_admin = getattr(request.state, "is_admin", False)
+    
+    # Build domain list
+    if is_admin:
+        all_domains = list(r.smembers("hydra:domains") or [])
+        if not all_domains:
+            all_domains = [domain]
+    else:
+        all_domains = [domain]
+    
+    stats = {
+        "domains": [],
+        "total_jobs": 0,
+        "total_runs": 0,
+        "total_workers": 0,
+        "total_pending": 0,
+        "total_running": 0,
+    }
+    
+    for dom in all_domains:
+        # Count jobs in this domain
+        jobs_count = db.job_definitions.count_documents({"domain": dom})
+        
+        # Count runs in this domain
+        runs_count = db.job_runs.count_documents({"domain": dom})
+        success_count = db.job_runs.count_documents({"domain": dom, "status": "success"})
+        failed_count = db.job_runs.count_documents({"domain": dom, "status": "failed"})
+        running_count = db.job_runs.count_documents({"domain": dom, "status": "running"})
+        
+        # Count workers in this domain
+        workers_count = len(list(r.scan_iter(f"workers:{dom}:*")))
+        
+        # Count pending jobs
+        pending_count = r.zcard(f"job_queue:{dom}:pending")
+        
+        # Count running jobs across all workers
+        domain_running = 0
+        for worker_key in r.scan_iter(f"workers:{dom}:*"):
+            parts = worker_key.split(":")
+            wid = parts[2] if len(parts) > 2 else parts[-1]
+            domain_running += r.scard(f"worker_running_set:{dom}:{wid}")
+        
+        domain_stats = {
+            "domain": dom,
+            "jobs_count": jobs_count,
+            "runs_count": runs_count,
+            "success_count": success_count,
+            "failed_count": failed_count,
+            "running_count": running_count,
+            "workers_count": workers_count,
+            "pending_count": pending_count,
+            "active_jobs": domain_running,
+        }
+        
+        stats["domains"].append(domain_stats)
+        stats["total_jobs"] += jobs_count
+        stats["total_runs"] += runs_count
+        stats["total_workers"] += workers_count
+        stats["total_pending"] += pending_count
+        stats["total_running"] += domain_running
+    
+    return stats
+
+
 def _serialize_ts(value):
     if isinstance(value, datetime):
         return value.isoformat()
@@ -385,3 +520,82 @@ def job_graph(job_id: str):
     ]
     edges: List[Dict[str, Any]] = []
     return {"nodes": nodes, "edges": edges}
+
+
+@router.delete("/jobs/{job_id}")
+def delete_job(job_id: str, request: Request):
+    """
+    Delete a job definition. This removes the job from the database and
+    removes any pending queue entries, but does not delete historical runs.
+    """
+    db = get_db()
+    r = get_redis()
+    existing = db.job_definitions.find_one({"_id": job_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="job not found")
+    domain = getattr(request.state, "domain", "prod")
+    is_admin = getattr(request.state, "is_admin", False)
+    if not is_admin and existing.get("domain", "prod") != domain:
+        raise HTTPException(status_code=403, detail="forbidden")
+    
+    job_domain = existing.get("domain", "prod")
+    # Remove from pending queue if present
+    r.zrem(f"job_queue:{job_domain}:pending", job_id)
+    # Delete the job definition
+    db.job_definitions.delete_one({"_id": job_id})
+    event_bus.publish("job_deleted", {"job_id": job_id, "domain": job_domain})
+    return {"ok": True, "job_id": job_id}
+
+
+@router.post("/jobs/{job_id}/pause")
+def pause_job(job_id: str, request: Request):
+    """
+    Pause a scheduled job by disabling its schedule.
+    This prevents future automatic runs but does not affect already queued or running instances.
+    """
+    db = get_db()
+    existing = db.job_definitions.find_one({"_id": job_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="job not found")
+    domain = getattr(request.state, "domain", "prod")
+    is_admin = getattr(request.state, "is_admin", False)
+    if not is_admin and existing.get("domain", "prod") != domain:
+        raise HTTPException(status_code=403, detail="forbidden")
+    
+    schedule = existing.get("schedule", {})
+    if schedule.get("mode") == "immediate":
+        raise HTTPException(status_code=400, detail="cannot pause immediate jobs")
+    
+    schedule["enabled"] = False
+    db.job_definitions.update_one(
+        {"_id": job_id},
+        {"$set": {"schedule.enabled": False, "updated_at": datetime.utcnow()}}
+    )
+    event_bus.publish("job_paused", {"job_id": job_id, "domain": existing.get("domain", "prod")})
+    return {"ok": True, "job_id": job_id, "status": "paused"}
+
+
+@router.post("/jobs/{job_id}/resume")
+def resume_job(job_id: str, request: Request):
+    """
+    Resume a paused scheduled job by re-enabling its schedule.
+    """
+    db = get_db()
+    existing = db.job_definitions.find_one({"_id": job_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="job not found")
+    domain = getattr(request.state, "domain", "prod")
+    is_admin = getattr(request.state, "is_admin", False)
+    if not is_admin and existing.get("domain", "prod") != domain:
+        raise HTTPException(status_code=403, detail="forbidden")
+    
+    schedule = existing.get("schedule", {})
+    if schedule.get("mode") == "immediate":
+        raise HTTPException(status_code=400, detail="cannot resume immediate jobs")
+    
+    db.job_definitions.update_one(
+        {"_id": job_id},
+        {"$set": {"schedule.enabled": True, "updated_at": datetime.utcnow()}}
+    )
+    event_bus.publish("job_resumed", {"job_id": job_id, "domain": existing.get("domain", "prod")})
+    return {"ok": True, "job_id": job_id, "status": "resumed"}

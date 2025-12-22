@@ -7,6 +7,35 @@ from ..models.worker_info import WorkerInfo
 router = APIRouter()
 
 
+def _build_worker_info(r, dom: str, wid: str) -> WorkerInfo:
+    """Helper to build WorkerInfo from Redis data"""
+    key = f"workers:{dom}:{wid}"
+    data = r.hgetall(key)
+    hb = r.zscore(f"worker_heartbeats:{dom}", wid)
+    running_jobs = list(r.smembers(f"worker_running_set:{dom}:{wid}") or [])
+    return WorkerInfo(
+        worker_id=wid,
+        domain=dom,
+        os=data.get("os", ""),
+        tags=(data.get("tags", "") or "").split(",") if data.get("tags") else [],
+        allowed_users=(data.get("allowed_users", "") or "").split(",") if data.get("allowed_users") else [],
+        max_concurrency=int(data.get("max_concurrency", 1)),
+        current_running=int(data.get("current_running", 0)),
+        last_heartbeat=hb,
+        status=data.get("status", "online"),
+        state=data.get("state", "online"),
+        cpu_count=int(data.get("cpu_count", 0)) or None,
+        python_version=data.get("python_version"),
+        cwd=data.get("cwd"),
+        hostname=data.get("hostname"),
+        ip=data.get("ip"),
+        subnet=data.get("subnet"),
+        deployment_type=data.get("deployment_type"),
+        run_user=data.get("run_user"),
+        running_jobs=running_jobs,
+    )
+
+
 @router.get("/workers/", response_model=List[WorkerInfo])
 def list_workers(request: Request):
     r = get_redis()
@@ -21,33 +50,33 @@ def list_workers(request: Request):
         for key in r.scan_iter(f"workers:{dom}:*"):
             parts = key.split(":")
             wid = parts[2] if len(parts) > 2 else parts[-1]
-            data = r.hgetall(key)
-            hb = r.zscore(f"worker_heartbeats:{dom}", wid)
-            running_jobs = list(r.smembers(f"worker_running_set:{dom}:{wid}") or [])
-            workers.append(
-                WorkerInfo(
-                    worker_id=wid,
-                    domain=dom,
-                    os=data.get("os", ""),
-                    tags=(data.get("tags", "") or "").split(",") if data.get("tags") else [],
-                    allowed_users=(data.get("allowed_users", "") or "").split(",") if data.get("allowed_users") else [],
-                    max_concurrency=int(data.get("max_concurrency", 1)),
-                    current_running=int(data.get("current_running", 0)),
-                    last_heartbeat=hb,
-                    status=data.get("status", "online"),
-                    state=data.get("state", "online"),
-                    cpu_count=int(data.get("cpu_count", 0)) or None,
-                    python_version=data.get("python_version"),
-                    cwd=data.get("cwd"),
-                    hostname=data.get("hostname"),
-                    ip=data.get("ip"),
-                    subnet=data.get("subnet"),
-                    deployment_type=data.get("deployment_type"),
-                    run_user=data.get("run_user"),
-                    running_jobs=running_jobs,
-                )
-            )
+            workers.append(_build_worker_info(r, dom, wid))
     return workers
+
+
+@router.get("/workers/{worker_id}", response_model=WorkerInfo)
+def get_worker(worker_id: str, request: Request):
+    """
+    Get details for a specific worker.
+    """
+    r = get_redis()
+    domain = getattr(request.state, "domain", "prod")
+    is_admin = getattr(request.state, "is_admin", False)
+    
+    # Try user's domain first
+    key = f"workers:{domain}:{worker_id}"
+    if r.exists(key):
+        return _build_worker_info(r, domain, worker_id)
+    
+    # If admin, search all domains
+    if is_admin:
+        for key in r.scan_iter(f"workers:*:{worker_id}"):
+            parts = key.split(":")
+            if len(parts) >= 3:
+                found_domain = parts[1]
+                return _build_worker_info(r, found_domain, worker_id)
+    
+    raise HTTPException(status_code=404, detail="worker not found")
 
 
 @router.post("/workers/{worker_id}/state")

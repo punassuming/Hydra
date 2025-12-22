@@ -53,6 +53,7 @@ class SourceConfig(BaseModel):
 class JobDefinition(BaseModel):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex, alias="_id")
     name: str
+    user: str = "default"
     domain: str = "prod"
     source: Optional[SourceConfig] = None
     affinity: Affinity
@@ -77,6 +78,7 @@ class JobDefinition(BaseModel):
 
 class JobCreate(BaseModel):
     name: str
+    user: str = "default"
     domain: str = "prod"
     source: Optional[SourceConfig] = None
     affinity: Affinity
@@ -90,6 +92,7 @@ class JobCreate(BaseModel):
 
 class JobUpdate(BaseModel):
     name: Optional[str] = None
+    user: Optional[str] = None
     domain: Optional[str] = None
     source: Optional[SourceConfig] = None
     affinity: Optional[Affinity] = None
