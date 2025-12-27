@@ -69,9 +69,13 @@ async def stream_run_logs(run_id: str, request: Request):
 
 
 @router.get("/runs/{run_id}")
-def get_run(run_id: str) -> Dict:
+def get_run(run_id: str, request: Request) -> Dict:
     db = get_db()
     doc = db.job_runs.find_one({"_id": run_id})
     if not doc:
         raise HTTPException(status_code=404, detail="run not found")
+    domain = getattr(request.state, "domain", "prod")
+    is_admin = getattr(request.state, "is_admin", False)
+    if not is_admin and doc.get("domain", "prod") != domain:
+        raise HTTPException(status_code=403, detail="forbidden")
     return JobRun.model_validate(doc).model_dump()

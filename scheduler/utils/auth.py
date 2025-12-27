@@ -62,17 +62,17 @@ async def enforce_api_key(request: Request, call_next):
         return await call_next(request)
 
     if _is_allowed_path(request.url.path):
-        # Best-effort: if a domain token is present, attach it
+        # Allow unauthenticated health/event access; attach context only when a valid token is supplied.
         if token:
-            domain, token_hash = _lookup_domain_by_token(token)
-            if domain:
-                request.state.domain = domain
-                request.state.is_admin = False
-                request.state.token_hash = token_hash
-            else:
-                # If admin token missing but provided, allow admin view passthrough
-                request.state.domain = ADMIN_DOMAIN
+            if token == admin_token:
+                request.state.domain = request.query_params.get("domain") or ADMIN_DOMAIN
                 request.state.is_admin = True
+            else:
+                domain, token_hash = _lookup_domain_by_token(token)
+                if domain:
+                    request.state.domain = domain
+                    request.state.is_admin = False
+                    request.state.token_hash = token_hash
         return await call_next(request)
 
     if not token:

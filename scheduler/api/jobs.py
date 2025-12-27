@@ -123,7 +123,13 @@ def list_jobs(request: Request):
     db = get_db()
     domain = getattr(request.state, "domain", "prod")
     is_admin = getattr(request.state, "is_admin", False)
-    query = {} if is_admin else {"domain": domain}
+    force_domain = request.query_params.get("domain")
+    if is_admin and force_domain:
+        query = {"domain": force_domain}
+    elif is_admin:
+        query = {}
+    else:
+        query = {"domain": domain}
     docs = list(db.job_definitions.find(query).sort("created_at", -1))
     return [JobDefinition.model_validate(doc) for doc in docs]
 
@@ -178,10 +184,12 @@ def get_job_runs(job_id: str, request: Request):
     if not job:
         raise HTTPException(status_code=404, detail="job not found")
     domain = getattr(request.state, "domain", "prod")
+    force_domain = request.query_params.get("domain")
     is_admin = getattr(request.state, "is_admin", False)
     if not is_admin and job.get("domain", "prod") != domain:
         raise HTTPException(status_code=403, detail="forbidden")
-    runs = _fetch_job_runs(job_id, domain_filter=None if is_admin else domain)
+    domain_filter = None if (is_admin and not force_domain) else domain
+    runs = _fetch_job_runs(job_id, domain_filter=domain_filter)
     return [JobRun.model_validate(r) for r in runs]
 
 
@@ -270,7 +278,13 @@ def jobs_overview(request: Request):
     r = get_redis()
     domain = getattr(request.state, "domain", "prod")
     is_admin = getattr(request.state, "is_admin", False)
-    query = {} if is_admin else {"domain": domain}
+    force_domain = request.query_params.get("domain")
+    if is_admin and force_domain:
+        query = {"domain": force_domain}
+    elif is_admin:
+        query = {}
+    else:
+        query = {"domain": domain}
     job_docs = list(db.job_definitions.find(query))
     overview = []
     for job in job_docs:
@@ -313,12 +327,17 @@ def _serialize_ts(value):
 
 
 @router.get("/jobs/{job_id}/grid")
-def job_grid(job_id: str):
+def job_grid(job_id: str, request: Request):
     db = get_db()
     job = db.job_definitions.find_one({"_id": job_id})
     if not job:
         raise HTTPException(status_code=404, detail="job not found")
-    runs = _fetch_job_runs(job_id)
+    domain = getattr(request.state, "domain", "prod")
+    is_admin = getattr(request.state, "is_admin", False)
+    if not is_admin and job.get("domain", "prod") != domain:
+        raise HTTPException(status_code=403, detail="forbidden")
+    force_domain = request.query_params.get("domain")
+    runs = _fetch_job_runs(job_id, domain_filter=None if (is_admin and not force_domain) else domain)
     task_id = "task_main"
     tasks = [
         {
@@ -350,11 +369,17 @@ def job_grid(job_id: str):
 
 
 @router.get("/jobs/{job_id}/gantt")
-def job_gantt(job_id: str):
+def job_gantt(job_id: str, request: Request):
     db = get_db()
-    if not db.job_definitions.find_one({"_id": job_id}):
+    job = db.job_definitions.find_one({"_id": job_id})
+    if not job:
         raise HTTPException(status_code=404, detail="job not found")
-    runs = _fetch_job_runs(job_id)
+    domain = getattr(request.state, "domain", "prod")
+    is_admin = getattr(request.state, "is_admin", False)
+    if not is_admin and job.get("domain", "prod") != domain:
+        raise HTTPException(status_code=403, detail="forbidden")
+    force_domain = request.query_params.get("domain")
+    runs = _fetch_job_runs(job_id, domain_filter=None if (is_admin and not force_domain) else domain)
     entries = [
         {
             "run_id": run["_id"],
@@ -369,12 +394,17 @@ def job_gantt(job_id: str):
 
 
 @router.get("/jobs/{job_id}/graph")
-def job_graph(job_id: str):
+def job_graph(job_id: str, request: Request):
     db = get_db()
     job = db.job_definitions.find_one({"_id": job_id})
     if not job:
         raise HTTPException(status_code=404, detail="job not found")
-    runs = _fetch_job_runs(job_id)
+    domain = getattr(request.state, "domain", "prod")
+    is_admin = getattr(request.state, "is_admin", False)
+    if not is_admin and job.get("domain", "prod") != domain:
+        raise HTTPException(status_code=403, detail="forbidden")
+    force_domain = request.query_params.get("domain")
+    runs = _fetch_job_runs(job_id, domain_filter=None if (is_admin and not force_domain) else domain)
     last_status = runs[-1]["status"] if runs else "unknown"
     nodes = [
         {

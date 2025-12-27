@@ -12,8 +12,12 @@ def list_workers(request: Request):
     r = get_redis()
     domain = getattr(request.state, "domain", "prod")
     is_admin = getattr(request.state, "is_admin", False)
+    force_domain = request.query_params.get("domain")
     workers = []
-    domains = [domain] if not is_admin else [key.split(":")[1] for key in r.scan_iter("workers:*") if key.count(":") >= 2]
+    if is_admin and not force_domain:
+        domains = [key.split(":")[1] for key in r.scan_iter("workers:*") if key.count(":") >= 2]
+    else:
+        domains = [force_domain or domain]
     domains = list(set(domains))
     if not domains:
         domains = [domain]
