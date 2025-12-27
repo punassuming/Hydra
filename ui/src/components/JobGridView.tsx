@@ -1,14 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card, Table, Tag } from "antd";
 import { fetchJobGrid } from "../api/jobs";
+import { useActiveDomain } from "../context/ActiveDomainContext";
 
 interface Props {
   jobId: string;
 }
 
 export function JobGridView({ jobId }: Props) {
+  const { domain } = useActiveDomain();
   const { data, isLoading } = useQuery({
-    queryKey: ["job-grid", jobId],
+    queryKey: ["job-grid", domain, jobId],
     queryFn: () => fetchJobGrid(jobId),
     enabled: Boolean(jobId),
     refetchInterval: 5000,

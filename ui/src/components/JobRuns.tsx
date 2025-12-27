@@ -5,6 +5,7 @@ import { fetchJobRuns, analyzeRun } from "../api/jobs";
 import { useEffect, useState } from "react";
 import { runStreamUrl } from "../api/client";
 import { Link } from "react-router-dom";
+import { useActiveDomain } from "../context/ActiveDomainContext";
 
 interface Props {
   jobId?: string | null;
@@ -13,10 +14,11 @@ interface Props {
 }
 
 export function JobRuns({ jobId, runs: providedRuns, loading }: Props) {
+  const { domain } = useActiveDomain();
   const enabled = Boolean(jobId);
   const shouldQuery = !providedRuns && enabled;
   const { data, isLoading } = useQuery({
-    queryKey: ["job-runs", jobId],
+    queryKey: ["job-runs", domain, jobId],
     queryFn: () => fetchJobRuns(jobId!),
     enabled: shouldQuery,
     refetchInterval: shouldQuery ? 5000 : false,

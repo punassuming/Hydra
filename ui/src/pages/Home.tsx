@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Row, Col, Card, Typography, Space, Button, Modal, Divider, Alert } from "antd";
 import { JobForm } from "../components/JobForm";
@@ -9,6 +9,7 @@ import { JobOverview } from "../components/JobOverview";
 import { useSchedulerEvents } from "../hooks/useEvents";
 import { createJob, fetchJobs, JobPayload, runAdhocJob, runJobNow, updateJob, validateJob } from "../api/jobs";
 import { WorkersMini } from "../components/WorkersMini";
+import { useActiveDomain } from "../context/ActiveDomainContext";
 
 export function HomePage() {
   const queryClient = useQueryClient();
@@ -17,9 +18,14 @@ export function HomePage() {
   const [validating, setValidating] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const events = useSchedulerEvents();
+  const { domain } = useActiveDomain();
+  useEffect(() => {
+    setSelectedJobId(null);
+    setStatusMessage(undefined);
+  }, [domain]);
 
   const jobsQuery = useQuery({
-    queryKey: ["jobs"],
+    queryKey: ["jobs", domain],
     queryFn: fetchJobs,
     refetchInterval: 5000,
   });
@@ -30,7 +36,7 @@ export function HomePage() {
   const createMutation = useMutation({
     mutationFn: createJob,
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", domain] });
       setSelectedJobId(data._id);
       setStatusMessage("Job created and queued");
       setModalVisible(false);
@@ -41,7 +47,7 @@ export function HomePage() {
   const updateMutation = useMutation({
     mutationFn: (payload: JobPayload) => updateJob(selectedJobId!, payload),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", domain] });
       setStatusMessage("Job updated");
       setModalVisible(false);
     },
@@ -57,7 +63,7 @@ export function HomePage() {
   const adhocMutation = useMutation({
     mutationFn: runAdhocJob,
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["jobs", domain] });
       setSelectedJobId(data._id);
       setStatusMessage("Adhoc job queued");
       setModalVisible(false);

@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, Form, Input, Space, Table, Typography, Button, message, Modal, Input as AntInput, Select } from "antd";
 import { fetchDomains, createDomain, updateDomain, DomainInfo, rotateDomainToken, fetchTemplates, importTemplate, deleteDomain } from "../api/admin";
-import { setTokenForDomain, setActiveDomain, getEffectiveToken, withTempToken, hasTokenForDomain, getAdminToken } from "../api/client";
+import { setTokenForDomain, getEffectiveToken, withTempToken, hasTokenForDomain, getAdminToken } from "../api/client";
 import { createJob } from "../api/jobs";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useActiveDomain } from "../context/ActiveDomainContext";
 
 export function AdminPage() {
   const queryClient = useQueryClient();
@@ -13,7 +14,9 @@ export function AdminPage() {
   const [importText, setImportText] = useState("");
   const [importing, setImporting] = useState(false);
   const [importToken, setImportToken] = useState("");
-  const [importDomain, setImportDomain] = useState<string>(localStorage.getItem("hydra_domain") || "prod");
+  const { domain: activeDomain, setDomain } = useActiveDomain();
+  const [importDomain, setImportDomain] = useState<string>(activeDomain);
+  useEffect(() => setImportDomain(activeDomain), [activeDomain]);
   const rotateMut = useMutation({
     mutationFn: (domain: string) => rotateDomainToken(domain),
     onSuccess: (data) => {
@@ -140,10 +143,10 @@ export function AdminPage() {
             onClick={() => {
               if (adminToken) {
                 setTokenForDomain(record.domain, adminToken);
-                setActiveDomain(record.domain);
+                setDomain(record.domain);
                 message.success(`Using admin token for domain ${record.domain}`);
               } else if (hasTokenForDomain(record.domain)) {
-                setActiveDomain(record.domain);
+                setDomain(record.domain);
                 message.success(`Switched to domain ${record.domain}`);
               } else {
                 setSwitchModal({ open: true, domain: record.domain });
@@ -214,7 +217,7 @@ export function AdminPage() {
             value={importDomain}
             onChange={(val) => {
               setImportDomain(val);
-              setActiveDomain(val);
+              setDomain(val);
               message.info(`Active domain set to ${val}`);
             }}
           />
@@ -238,7 +241,7 @@ export function AdminPage() {
                 try {
                   await importTemplate(selectedSample);
                   message.success("Template imported");
-                  queryClient.invalidateQueries({ queryKey: ["jobs"] });
+                  queryClient.invalidateQueries({ queryKey: ["jobs", activeDomain] });
                 } catch (err) {
                   message.error((err as Error).message);
                 }
@@ -358,7 +361,7 @@ export function AdminPage() {
                   const fail = results.length - ok;
                   if (ok) message.success(`Imported ${ok} job(s)`);
                   if (fail) message.error(`${fail} job(s) failed`);
-                  queryClient.invalidateQueries({ queryKey: ["jobs"] });
+                  queryClient.invalidateQueries({ queryKey: ["jobs", activeDomain] });
                 } finally {
                   if (originalToken) setTokenForDomain(localStorage.getItem("hydra_domain") || "prod", originalToken);
                   setImporting(false);
@@ -398,7 +401,7 @@ export function AdminPage() {
             return;
           }
           setTokenForDomain(switchModal.domain, switchModal.token);
-          setActiveDomain(switchModal.domain);
+          setDomain(switchModal.domain);
           message.success(`Switched to domain ${switchModal.domain}`);
           setSwitchModal({ open: false });
         }}

@@ -72,6 +72,7 @@ export interface JobDefinition {
   _id: string;
   name: string;
   user: string;
+  domain?: string;
   priority: number;
   affinity: Affinity;
   executor: Executor;
@@ -87,6 +88,7 @@ export interface JobRun {
   _id: string;
   job_id: string;
   user: string;
+  domain?: string;
   worker_id?: string;
   start_ts?: string;
   scheduled_ts?: string;

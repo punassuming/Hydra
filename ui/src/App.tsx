@@ -13,14 +13,15 @@ import { AdminPage } from "./pages/Admin";
 import { HydraLogo } from "./components/HydraLogo";
 import { DomainSelector } from "./components/DomainSelector";
 import { AuthPrompt } from "./components/AuthPrompt";
-import { hasAnyToken, getActiveDomain } from "./api/client";
+import { hasAnyToken } from "./api/client";
 import { WorkerDetailPage } from "./pages/WorkerDetail";
+import { ActiveDomainProvider, useActiveDomain } from "./context/ActiveDomainContext";
 
-function App() {
+function AppShell() {
   const location = useLocation();
   const [darkMode, setDarkMode] = useState(false);
   const [authOpen, setAuthOpen] = useState(!hasAnyToken());
-  const [activeDomain, setActiveDomain] = useState(getActiveDomain());
+  const { domain: activeDomain, setDomain: setActiveDomain } = useActiveDomain();
   const { Header, Content } = Layout;
   const menuItems = useMemo(
     () => [
@@ -149,4 +150,10 @@ function App() {
   );
 }
 
-export default App;
+export default function App() {
+  return (
+    <ActiveDomainProvider>
+      <AppShell />
+    </ActiveDomainProvider>
+  );
+}

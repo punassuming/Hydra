@@ -1,24 +1,14 @@
 import { Select, Space, Typography, Button, Modal, Input, Tag } from "antd";
-import { useEffect, useState } from "react";
-import {
-  setActiveDomain as storeDomain,
-  getActiveDomain,
-  setTokenForDomain,
-  forgetToken,
-  getAdminToken,
-  hasTokenForDomain,
-} from "../api/client";
+import { useState } from "react";
+import { setActiveDomain as storeDomain, setTokenForDomain, forgetToken, getAdminToken, hasTokenForDomain } from "../api/client";
 import { useDomains } from "../hooks/useDomains";
+import { useActiveDomain } from "../context/ActiveDomainContext";
 
 export function DomainSelector({ onChange }: { onChange?: (domain: string) => void }) {
   const domainOptions = useDomains();
-  const [current, setCurrent] = useState<string>(getActiveDomain());
+  const { domain: current, setDomain } = useActiveDomain();
   const [switchModal, setSwitchModal] = useState<{ open: boolean; domain?: string; token?: string }>({ open: false });
   const adminToken = getAdminToken();
-
-  useEffect(() => {
-    setCurrent(getActiveDomain());
-  }, []);
 
   return (
     <Space>
@@ -34,7 +24,7 @@ export function DomainSelector({ onChange }: { onChange?: (domain: string) => vo
         options={domainOptions.map((o) => ({ label: o.label, value: o.domain }))}
         onChange={(domain) => {
           storeDomain(domain);
-          setCurrent(domain);
+          setDomain(domain);
           onChange?.(domain);
         }}
         style={{ minWidth: 140 }}
@@ -48,8 +38,7 @@ export function DomainSelector({ onChange }: { onChange?: (domain: string) => vo
           onClick={() => {
             setTokenForDomain(current, adminToken);
             storeDomain(current);
-            setCurrent(current);
-            onChange?.(current);
+            setDomain(current);
           }}
         >
           Use Admin
@@ -70,8 +59,7 @@ export function DomainSelector({ onChange }: { onChange?: (domain: string) => vo
           if (switchModal.domain && switchModal.token) {
             setTokenForDomain(switchModal.domain, switchModal.token);
             storeDomain(switchModal.domain);
-            setCurrent(switchModal.domain);
-            onChange?.(switchModal.domain);
+            setDomain(switchModal.domain);
             setSwitchModal({ open: false });
           }
         }}

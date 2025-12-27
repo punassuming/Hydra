@@ -1,10 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card, Table, Tag, Progress, Tooltip } from "antd";
 import { fetchWorkers } from "../api/jobs";
+import { useActiveDomain } from "../context/ActiveDomainContext";
 
 export function WorkersPanel() {
+  const { domain } = useActiveDomain();
   const { data, isLoading } = useQuery({
-    queryKey: ["workers"],
+    queryKey: ["workers", domain],
     queryFn: fetchWorkers,
     refetchInterval: 5000,
   });

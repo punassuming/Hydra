@@ -4,10 +4,12 @@ import { fetchJobOverview } from "../api/jobs";
 import { Card, Table, Tag, Modal, Typography, Space } from "antd";
 import { JobOverview as JobOverviewType } from "../types";
 import { Link } from "react-router-dom";
+import { useActiveDomain } from "../context/ActiveDomainContext";
 
 export function JobOverview() {
+  const { domain } = useActiveDomain();
   const { data, isLoading } = useQuery({
-    queryKey: ["job-overview"],
+    queryKey: ["job-overview", domain],
     queryFn: fetchJobOverview,
     refetchInterval: 5000,
   });

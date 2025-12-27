@@ -7,21 +7,23 @@ import { JobGridView } from "../components/JobGridView";
 import { JobGanttView } from "../components/JobGanttView";
 import { JobGraphView } from "../components/JobGraphView";
 import { fetchJob, fetchJobRuns, runJobNow } from "../api/jobs";
+import { useActiveDomain } from "../context/ActiveDomainContext";
 
 export function JobDetailPage() {
   const { jobId } = useParams<{ jobId: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [messageApi, contextHolder] = message.useMessage();
+  const { domain } = useActiveDomain();
 
   const jobQuery = useQuery({
-    queryKey: ["job", jobId],
+    queryKey: ["job", domain, jobId],
     queryFn: () => fetchJob(jobId!),
     enabled: Boolean(jobId),
   });
 
   const runsQuery = useQuery({
-    queryKey: ["job-runs", jobId],
+    queryKey: ["job-runs", domain, jobId],
     queryFn: () => fetchJobRuns(jobId!),
     enabled: Boolean(jobId),
     refetchInterval: 5000,
@@ -31,10 +33,10 @@ export function JobDetailPage() {
     mutationFn: (id: string) => runJobNow(id),
     onSuccess: () => {
       messageApi.success("Run queued");
-      queryClient.invalidateQueries({ queryKey: ["job-runs", jobId] });
-      queryClient.invalidateQueries({ queryKey: ["job-grid", jobId] });
-      queryClient.invalidateQueries({ queryKey: ["job-gantt", jobId] });
-      queryClient.invalidateQueries({ queryKey: ["job-graph", jobId] });
+      queryClient.invalidateQueries({ queryKey: ["job-runs", domain, jobId] });
+      queryClient.invalidateQueries({ queryKey: ["job-grid", domain, jobId] });
+      queryClient.invalidateQueries({ queryKey: ["job-gantt", domain, jobId] });
+      queryClient.invalidateQueries({ queryKey: ["job-graph", domain, jobId] });
     },
   });
 

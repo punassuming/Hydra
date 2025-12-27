@@ -4,15 +4,17 @@ import { fetchWorkers } from "../api/jobs";
 import { WorkerInfo } from "../types";
 import { apiClient } from "../api/client";
 import { useNavigate } from "react-router-dom";
+import { useActiveDomain } from "../context/ActiveDomainContext";
 
 export function WorkersPage() {
   const queryClient = useQueryClient();
-  const { data, isLoading } = useQuery({ queryKey: ["workers"], queryFn: fetchWorkers, refetchInterval: 5000 });
+  const { domain } = useActiveDomain();
+  const { data, isLoading } = useQuery({ queryKey: ["workers", domain], queryFn: fetchWorkers, refetchInterval: 5000 });
   const navigate = useNavigate();
   const setStateMutation = useMutation({
     mutationFn: ({ workerId, state }: { workerId: string; state: string }) =>
       apiClient.post(`/workers/${workerId}/state`, { state }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["workers"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["workers", domain] }),
   });
 
   const columns = [

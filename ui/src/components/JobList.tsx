@@ -19,6 +19,7 @@ export function JobList({ jobs, onSelect, selectedId, loading, onEdit }: Props) 
       key: "name",
       render: (_: unknown, record: JobDefinition) => <Link to={`/jobs/${record._id}`}>{record.name}</Link>,
     },
+    { title: "Domain", dataIndex: "domain", key: "domain", render: (value?: string) => value ?? "prod" },
     { title: "User", dataIndex: "user", key: "user" },
     {
       title: "Executor",

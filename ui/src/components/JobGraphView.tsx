@@ -1,14 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card, List, Tag } from "antd";
 import { fetchJobGraph } from "../api/jobs";
+import { useActiveDomain } from "../context/ActiveDomainContext";
 
 interface Props {
   jobId: string;
 }
 
 export function JobGraphView({ jobId }: Props) {
+  const { domain } = useActiveDomain();
   const { data, isLoading } = useQuery({
-    queryKey: ["job-graph", jobId],
+    queryKey: ["job-graph", domain, jobId],
     queryFn: () => fetchJobGraph(jobId),
     enabled: Boolean(jobId),
   });

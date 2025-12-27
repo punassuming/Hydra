@@ -2,9 +2,11 @@ import { Card, Col, Row, Space, Tag, Typography, Skeleton } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { fetchWorkers } from "../api/jobs";
 import { Link } from "react-router-dom";
+import { useActiveDomain } from "../context/ActiveDomainContext";
 
 export function WorkersMini() {
-  const { data, isLoading } = useQuery({ queryKey: ["workers"], queryFn: fetchWorkers, refetchInterval: 8000 });
+  const { domain } = useActiveDomain();
+  const { data, isLoading } = useQuery({ queryKey: ["workers", domain], queryFn: fetchWorkers, refetchInterval: 8000 });
   const workers = data ?? [];
 
   return (

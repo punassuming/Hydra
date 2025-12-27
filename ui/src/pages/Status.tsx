@@ -2,15 +2,17 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, Space, Tag, Typography, Button, Progress, Table } from "antd";
 import { fetchJobOverview, runJobNow } from "../api/jobs";
 import { JobRun } from "../types";
+import { useActiveDomain } from "../context/ActiveDomainContext";
 
 export function StatusPage() {
   const queryClient = useQueryClient();
-  const overviewQuery = useQuery({ queryKey: ["job-overview"], queryFn: fetchJobOverview, refetchInterval: 5000 });
+  const { domain } = useActiveDomain();
+  const overviewQuery = useQuery({ queryKey: ["job-overview", domain], queryFn: fetchJobOverview, refetchInterval: 5000 });
 
   const runNow = useMutation({
     mutationFn: (jobId: string) => runJobNow(jobId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["job-overview"] });
+      queryClient.invalidateQueries({ queryKey: ["job-overview", domain] });
     },
   });
 

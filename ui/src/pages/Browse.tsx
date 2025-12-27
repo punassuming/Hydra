@@ -3,10 +3,12 @@ import { Tabs, Card, Typography } from "antd";
 import { fetchJobs, fetchHistory } from "../api/jobs";
 import { JobList } from "../components/JobList";
 import { JobRuns } from "../components/JobRuns";
+import { useActiveDomain } from "../context/ActiveDomainContext";
 
 export function BrowsePage() {
-  const jobsQuery = useQuery({ queryKey: ["jobs"], queryFn: fetchJobs, refetchInterval: 5000 });
-  const historyQuery = useQuery({ queryKey: ["history"], queryFn: fetchHistory, refetchInterval: 5000 });
+  const { domain } = useActiveDomain();
+  const jobsQuery = useQuery({ queryKey: ["jobs", domain], queryFn: fetchJobs, refetchInterval: 5000 });
+  const historyQuery = useQuery({ queryKey: ["history", domain], queryFn: fetchHistory, refetchInterval: 5000 });
 
   const items = [
     {

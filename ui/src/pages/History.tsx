@@ -3,10 +3,12 @@ import { useQuery } from "@tanstack/react-query";
 import { Table, Tag, Modal, Typography, Space, Card } from "antd";
 import { fetchHistory } from "../api/jobs";
 import { JobRun } from "../types";
+import { useActiveDomain } from "../context/ActiveDomainContext";
 
 export function HistoryPage() {
+  const { domain } = useActiveDomain();
   const { data, isLoading } = useQuery({
-    queryKey: ["history"],
+    queryKey: ["history", domain],
     queryFn: fetchHistory,
     refetchInterval: 5000,
   });
@@ -15,6 +17,7 @@ export function HistoryPage() {
   const columns = [
     { title: "Job", dataIndex: "job_id", key: "job_id" },
     { title: "User", dataIndex: "user", key: "user" },
+    { title: "Domain", dataIndex: "domain", key: "domain", render: (value?: string) => value ?? "prod" },
     {
       title: "Status",
       dataIndex: "status",

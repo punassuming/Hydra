@@ -1,14 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card, List, Tag } from "antd";
 import { fetchJobGantt } from "../api/jobs";
+import { useActiveDomain } from "../context/ActiveDomainContext";
 
 interface Props {
   jobId: string;
 }
 
 export function JobGanttView({ jobId }: Props) {
+  const { domain } = useActiveDomain();
   const { data, isLoading } = useQuery({
-    queryKey: ["job-gantt", jobId],
+    queryKey: ["job-gantt", domain, jobId],
     queryFn: () => fetchJobGantt(jobId),
     enabled: Boolean(jobId),
     refetchInterval: 5000,

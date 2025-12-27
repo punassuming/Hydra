@@ -17,6 +17,7 @@ import {
 } from "antd";
 import { JobDefinition, PythonEnvironment } from "../types";
 import { JobPayload, ValidationResult, fetchWorkers, generateJob } from "../api/jobs";
+import { useActiveDomain } from "../context/ActiveDomainContext";
 
 const defaultAffinity = {
   os: ["linux"],
@@ -100,6 +101,7 @@ export function JobForm({
   statusMessage,
   onReset,
 }: Props) {
+  const { domain } = useActiveDomain();
   const [payload, setPayload] = useState<JobPayload>(() => createDefaultPayload());
   const [activeStep, setActiveStep] = useState(0);
   const [prompt, setPrompt] = useState("");
@@ -107,7 +109,7 @@ export function JobForm({
   const [provider, setProvider] = useState<"gemini" | "openai">("gemini");
 
   const workersQuery = useQuery({
-    queryKey: ["workers"],
+    queryKey: ["workers", domain],
     queryFn: fetchWorkers,
     staleTime: 5000,
   });

@@ -59,10 +59,24 @@ export function getActiveDomain(): string {
   return localStorage.getItem(ACTIVE_DOMAIN_KEY) || "prod";
 }
 
-export function getEffectiveToken(domain?: string): string | undefined {
+type TokenContext =
+  | { token: string; activeDomain: string; source: "domain" | "admin" }
+  | { token?: undefined; activeDomain: string; source: "none" };
+
+export function getTokenContext(domain?: string): TokenContext {
   const map = readTokenMap();
-  const active = domain || getActiveDomain();
-  return map[active] || map["admin"];
+  const activeDomain = domain || getActiveDomain();
+  if (map[activeDomain]) {
+    return { token: map[activeDomain], activeDomain, source: "domain" };
+  }
+  if (map["admin"]) {
+    return { token: map["admin"], activeDomain, source: "admin" };
+  }
+  return { activeDomain, source: "none" };
+}
+
+export function getEffectiveToken(domain?: string): string | undefined {
+  return getTokenContext(domain).token;
 }
 
 export function withTempToken<T>(token: string | undefined, fn: () => Promise<T>): Promise<T> {
@@ -90,11 +104,15 @@ async function handleResponse<T>(res: Response): Promise<T> {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers || {});
-  const token = getEffectiveToken();
+  const { token, activeDomain, source } = getTokenContext();
   if (token) {
     headers.set("x-api-key", token);
   }
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  const url = new URL(path, API_BASE);
+  if (source === "admin" && !url.searchParams.has("domain")) {
+    url.searchParams.set("domain", activeDomain);
+  }
+  const res = await fetch(url.toString(), { ...init, headers });
   return handleResponse<T>(res);
 }
 
@@ -119,11 +137,24 @@ export const apiClient = {
 };
 
 export const streamUrl = () => {
-  const token = getEffectiveToken();
-  return token ? `${API_BASE}/events/stream?token=${encodeURIComponent(token)}` : `${API_BASE}/events/stream`;
+  const { token, activeDomain, source } = getTokenContext();
+  const url = new URL("/events/stream", API_BASE);
+  if (token) {
+    url.searchParams.set("token", token);
+  }
+  if (source === "admin" && !url.searchParams.has("domain")) {
+    url.searchParams.set("domain", activeDomain);
+  }
+  return url.toString();
 };
 export const runStreamUrl = (runId: string) => {
-  const token = getEffectiveToken();
-  const qs = token ? `?token=${encodeURIComponent(token)}` : "";
-  return `${API_BASE}/runs/${runId}/stream${qs}`;
+  const { token, activeDomain, source } = getTokenContext();
+  const url = new URL(`/runs/${runId}/stream`, API_BASE);
+  if (token) {
+    url.searchParams.set("token", token);
+  }
+  if (source === "admin" && !url.searchParams.has("domain")) {
+    url.searchParams.set("domain", activeDomain);
+  }
+  return url.toString();
 };
