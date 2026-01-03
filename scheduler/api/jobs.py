@@ -124,12 +124,29 @@ def list_jobs(request: Request):
     domain = getattr(request.state, "domain", "prod")
     is_admin = getattr(request.state, "is_admin", False)
     force_domain = request.query_params.get("domain")
+    search = request.query_params.get("search")
+    tags_param = request.query_params.get("tags")
+    
     if is_admin and force_domain:
         query = {"domain": force_domain}
     elif is_admin:
         query = {}
     else:
         query = {"domain": domain}
+    
+    # Add search filter
+    if search:
+        query["$or"] = [
+            {"name": {"$regex": search, "$options": "i"}},
+            {"_id": {"$regex": search, "$options": "i"}},
+        ]
+    
+    # Add tag filter
+    if tags_param:
+        tags = [t.strip() for t in tags_param.split(",") if t.strip()]
+        if tags:
+            query["tags"] = {"$in": tags}
+    
     docs = list(db.job_definitions.find(query).sort("created_at", -1))
     return [JobDefinition.model_validate(doc) for doc in docs]
 
@@ -304,17 +321,41 @@ def jobs_overview(request: Request):
         )
         recent_runs = [_normalize_run_doc(run) for run in recent_runs_cursor]
         last_run_doc = recent_runs[0] if recent_runs else None
+        
+        # Calculate average duration from successful runs
+        avg_duration = None
+        completed_runs = list(db.job_runs.find(
+            {"job_id": job_id, "status": {"$in": ["success", "failed"]}, "duration": {"$ne": None}}
+        ).limit(10))
+        if completed_runs:
+            durations = [run.get("duration", 0) for run in completed_runs if run.get("duration") is not None]
+            if durations:
+                avg_duration = sum(durations) / len(durations)
+        
+        # Get last failure reason
+        last_failure_reason = None
+        if failed_runs > 0:
+            last_failed = db.job_runs.find_one(
+                {"job_id": job_id, "status": "failed"},
+                sort=[("start_ts", -1)]
+            )
+            if last_failed:
+                last_failure_reason = last_failed.get("completion_reason")
+        
         overview.append(
             {
                 "job_id": job_id,
                 "name": job.get("name", ""),
                 "schedule_mode": (job.get("schedule") or {}).get("mode", "immediate"),
+                "tags": job.get("tags", []),
                 "total_runs": total_runs,
                 "success_runs": success_runs,
                 "failed_runs": failed_runs,
                 "queued_runs": queued,
                 "last_run": last_run_doc,
                 "recent_runs": recent_runs,
+                "avg_duration_seconds": avg_duration,
+                "last_failure_reason": last_failure_reason,
             }
         )
     return overview
@@ -415,3 +456,64 @@ def job_graph(job_id: str, request: Request):
     ]
     edges: List[Dict[str, Any]] = []
     return {"nodes": nodes, "edges": edges}
+
+
+@router.get("/overview/statistics")
+def jobs_statistics(request: Request):
+    """Get aggregate statistics across all jobs"""
+    db = get_db()
+    r = get_redis()
+    domain = getattr(request.state, "domain", "prod")
+    is_admin = getattr(request.state, "is_admin", False)
+    force_domain = request.query_params.get("domain")
+    
+    if is_admin and force_domain:
+        query = {"domain": force_domain}
+    elif is_admin:
+        query = {}
+    else:
+        query = {"domain": domain}
+    
+    total_jobs = db.job_definitions.count_documents(query)
+    
+    # Count jobs by schedule mode
+    cron_jobs = db.job_definitions.count_documents({**query, "schedule.mode": "cron"})
+    interval_jobs = db.job_definitions.count_documents({**query, "schedule.mode": "interval"})
+    immediate_jobs = db.job_definitions.count_documents({**query, "schedule.mode": "immediate"})
+    
+    # Count enabled vs disabled
+    enabled_jobs = db.job_definitions.count_documents({**query, "schedule.enabled": True})
+    disabled_jobs = total_jobs - enabled_jobs
+    
+    # Run statistics
+    run_query = query.copy() if "domain" in query else {}
+    if "domain" in run_query:
+        run_query = {"domain": run_query["domain"]}
+    
+    total_runs = db.job_runs.count_documents(run_query)
+    success_runs = db.job_runs.count_documents({**run_query, "status": "success"})
+    failed_runs = db.job_runs.count_documents({**run_query, "status": "failed"})
+    running_runs = db.job_runs.count_documents({**run_query, "status": "running"})
+    
+    # Get unique tags
+    all_jobs = list(db.job_definitions.find(query, {"tags": 1}))
+    all_tags = set()
+    for job in all_jobs:
+        all_tags.update(job.get("tags", []))
+    
+    return {
+        "total_jobs": total_jobs,
+        "schedule_breakdown": {
+            "cron": cron_jobs,
+            "interval": interval_jobs,
+            "immediate": immediate_jobs,
+        },
+        "enabled_jobs": enabled_jobs,
+        "disabled_jobs": disabled_jobs,
+        "total_runs": total_runs,
+        "success_runs": success_runs,
+        "failed_runs": failed_runs,
+        "running_runs": running_runs,
+        "success_rate": (success_runs / total_runs * 100) if total_runs > 0 else 0,
+        "available_tags": sorted(list(all_tags)),
+    }

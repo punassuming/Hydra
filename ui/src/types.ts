@@ -80,6 +80,7 @@ export interface JobDefinition {
   timeout: number;
   schedule: ScheduleConfig;
   completion: CompletionCriteria;
+  tags: string[];
   created_at: string;
   updated_at: string;
 }
@@ -113,12 +114,32 @@ export interface JobOverview {
   job_id: string;
   name: string;
   schedule_mode: string;
+  tags: string[];
   total_runs: number;
   success_runs: number;
   failed_runs: number;
   queued_runs?: number;
   last_run?: JobRun;
   recent_runs?: JobRun[];
+  avg_duration_seconds?: number | null;
+  last_failure_reason?: string | null;
+}
+
+export interface JobStatistics {
+  total_jobs: number;
+  schedule_breakdown: {
+    cron: number;
+    interval: number;
+    immediate: number;
+  };
+  enabled_jobs: number;
+  disabled_jobs: number;
+  total_runs: number;
+  success_runs: number;
+  failed_runs: number;
+  running_runs: number;
+  success_rate: number;
+  available_tags: string[];
 }
 
 export interface JobGridTaskInstance {

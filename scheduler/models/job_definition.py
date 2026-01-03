@@ -62,6 +62,7 @@ class JobDefinition(BaseModel):
     priority: int = 5
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     completion: CompletionCriteria = Field(default_factory=CompletionCriteria)
+    tags: List[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -86,6 +87,7 @@ class JobCreate(BaseModel):
     priority: int = 5
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     completion: CompletionCriteria = Field(default_factory=CompletionCriteria)
+    tags: List[str] = Field(default_factory=list)
 
 
 class JobUpdate(BaseModel):
@@ -99,6 +101,7 @@ class JobUpdate(BaseModel):
     priority: Optional[int] = None
     schedule: Optional[ScheduleConfig] = None
     completion: Optional[CompletionCriteria] = None
+    tags: Optional[List[str]] = None
 
 
 class JobValidationResult(BaseModel):

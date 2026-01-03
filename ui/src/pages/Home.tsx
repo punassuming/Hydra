@@ -6,6 +6,7 @@ import { JobList } from "../components/JobList";
 import { JobRuns } from "../components/JobRuns";
 import { EventsFeed } from "../components/EventsFeed";
 import { JobOverview } from "../components/JobOverview";
+import { JobStatistics } from "../components/JobStatistics";
 import { useSchedulerEvents } from "../hooks/useEvents";
 import { createJob, fetchJobs, JobPayload, runAdhocJob, runJobNow, updateJob, validateJob } from "../api/jobs";
 import { WorkersMini } from "../components/WorkersMini";
@@ -171,6 +172,8 @@ export function HomePage() {
           onEdit={() => setModalVisible(true)}
         />
       </Card>
+
+      <JobStatistics />
 
       <JobOverview />
 

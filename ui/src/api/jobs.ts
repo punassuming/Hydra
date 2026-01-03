@@ -9,6 +9,7 @@ import {
   JobGridData,
   JobGanttData,
   JobGraphData,
+  JobStatistics,
 } from "../types";
 
 export interface JobPayload {
@@ -21,6 +22,7 @@ export interface JobPayload {
   timeout: number;
   schedule: ScheduleConfig;
   completion: CompletionCriteria;
+  tags?: string[];
 }
 
 export interface ValidationResult {
@@ -29,11 +31,18 @@ export interface ValidationResult {
   next_run_at?: string | null;
 }
 
-export const fetchJobs = () => apiClient.get<JobDefinition[]>("/jobs/");
+export const fetchJobs = (params?: { search?: string; tags?: string }) => {
+  const queryParams = new URLSearchParams();
+  if (params?.search) queryParams.append("search", params.search);
+  if (params?.tags) queryParams.append("tags", params.tags);
+  const queryString = queryParams.toString();
+  return apiClient.get<JobDefinition[]>(`/jobs/${queryString ? `?${queryString}` : ""}`);
+};
 export const fetchJob = (jobId: string) => apiClient.get<JobDefinition>(`/jobs/${jobId}`);
 export const fetchWorkers = () => apiClient.get<WorkerInfo[]>("/workers/");
 export const fetchJobRuns = (jobId: string) => apiClient.get<JobRun[]>(`/jobs/${jobId}/runs`);
 export const fetchJobOverview = () => apiClient.get<JobOverview[]>("/overview/jobs");
+export const fetchJobStatistics = () => apiClient.get<JobStatistics>("/overview/statistics");
 export const fetchHistory = () => apiClient.get<JobRun[]>("/history/");
 export const fetchJobGrid = (jobId: string) => apiClient.get<JobGridData>(`/jobs/${jobId}/grid`);
 export const fetchJobGantt = (jobId: string) => apiClient.get<JobGanttData>(`/jobs/${jobId}/gantt`);
