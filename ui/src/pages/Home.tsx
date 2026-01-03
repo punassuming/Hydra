@@ -27,7 +27,7 @@ export function HomePage() {
 
   const jobsQuery = useQuery({
     queryKey: ["jobs", domain],
-    queryFn: fetchJobs,
+    queryFn: () => fetchJobs(),
     refetchInterval: 5000,
   });
 

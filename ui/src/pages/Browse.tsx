@@ -7,7 +7,7 @@ import { useActiveDomain } from "../context/ActiveDomainContext";
 
 export function BrowsePage() {
   const { domain } = useActiveDomain();
-  const jobsQuery = useQuery({ queryKey: ["jobs", domain], queryFn: fetchJobs, refetchInterval: 5000 });
+  const jobsQuery = useQuery({ queryKey: ["jobs", domain], queryFn: () => fetchJobs(), refetchInterval: 5000 });
   const historyQuery = useQuery({ queryKey: ["history", domain], queryFn: fetchHistory, refetchInterval: 5000 });
 
   const items = [
