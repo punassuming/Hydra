@@ -76,6 +76,7 @@ const createDefaultPayload = (): JobPayload => ({
     stderr_contains: [],
     stderr_not_contains: [],
   },
+  tags: [],
 });
 
 interface Props {
@@ -181,6 +182,7 @@ export function JobForm({
         priority: (selectedJob as any).priority ?? 5,
         schedule: { ...createDefaultPayload().schedule, ...(selectedJob.schedule ?? {}) },
         completion: { ...createDefaultPayload().completion, ...(selectedJob.completion ?? {}) },
+        tags: selectedJob.tags ?? [],
       });
     } else {
       setPayload(createDefaultPayload());
@@ -718,6 +720,17 @@ export function JobForm({
               <Col xs={24} md={12}>
                 <Form.Item label="Name" required>
                   <Input value={payload.name} onChange={(e) => updatePayload("name", e.target.value)} placeholder="batch-import" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item label="Tags (comma-separated)">
+                  <Select
+                    mode="tags"
+                    style={{ width: "100%" }}
+                    placeholder="production, data-import, critical"
+                    value={payload.tags ?? []}
+                    onChange={(value) => updatePayload("tags", value)}
+                  />
                 </Form.Item>
               </Col>
             </Row>

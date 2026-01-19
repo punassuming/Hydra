@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchJobOverview } from "../api/jobs";
-import { Card, Table, Tag, Modal, Typography, Space } from "antd";
+import { Card, Table, Tag, Modal, Typography, Space, Tooltip } from "antd";
 import { JobOverview as JobOverviewType } from "../types";
 import { Link } from "react-router-dom";
 import { useActiveDomain } from "../context/ActiveDomainContext";
@@ -31,6 +31,20 @@ export function JobOverview() {
       render: (_: unknown, record: JobOverviewType) => <Link to={`/jobs/${record.job_id}`}>{record.name}</Link>,
     },
     {
+      title: "Tags",
+      dataIndex: "tags",
+      key: "tags",
+      render: (tags: string[]) => (
+        <>
+          {tags && tags.length > 0 ? (
+            tags.map((tag) => <Tag key={tag} color="blue">{tag}</Tag>)
+          ) : (
+            <Typography.Text type="secondary">-</Typography.Text>
+          )}
+        </>
+      ),
+    },
+    {
       title: "Schedule",
       dataIndex: "schedule_mode",
       key: "schedule_mode",
@@ -49,9 +63,24 @@ export function JobOverview() {
       title: "Failed",
       dataIndex: "failed_runs",
       key: "failed_runs",
-      render: (value: number) => <Typography.Text type={value > 0 ? "danger" : undefined}>{value}</Typography.Text>,
+      render: (value: number, record: JobOverviewType) => (
+        <Tooltip title={record.last_failure_reason || "No recent failures"}>
+          <Typography.Text type={value > 0 ? "danger" : undefined}>{value}</Typography.Text>
+        </Tooltip>
+      ),
     },
     { title: "Queued", dataIndex: "queued_runs", key: "queued_runs" },
+    {
+      title: "Avg Duration",
+      dataIndex: "avg_duration_seconds",
+      key: "avg_duration_seconds",
+      render: (duration: number | null) => {
+        if (!duration) return "-";
+        if (duration < 60) return `${duration.toFixed(1)}s`;
+        if (duration < 3600) return `${(duration / 60).toFixed(1)}m`;
+        return `${(duration / 3600).toFixed(1)}h`;
+      },
+    },
     {
       title: "Last Run",
       key: "last_run",
