@@ -1,11 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
-import { Table, Tag, Modal, Typography, Space, Divider, Button, Alert, Select } from "antd";
+import { Table, Modal, Typography, Space, Divider } from "antd";
 import { JobRun } from "../types";
-import { fetchJobRuns, analyzeRun } from "../api/jobs";
+import { fetchJobRuns } from "../api/jobs";
 import { useEffect, useState } from "react";
 import { runStreamUrl } from "../api/client";
 import { Link } from "react-router-dom";
 import { useActiveDomain } from "../context/ActiveDomainContext";
+import { StatusBadge } from "./StatusBadge";
+import { LogViewer } from "./LogViewer";
+import { FailureInsight } from "./FailureInsight";
 
 interface Props {
   jobId?: string | null;
@@ -26,33 +29,6 @@ export function JobRuns({ jobId, runs: providedRuns, loading }: Props) {
   const [logModal, setLogModal] = useState<{ visible: boolean; run?: JobRun }>({ visible: false });
   const [liveLogs, setLiveLogs] = useState<{ stdout: string; stderr: string }>({ stdout: "", stderr: "" });
   const [source, setSource] = useState<EventSource | null>(null);
-  const [analysis, setAnalysis] = useState<string | null>(null);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [provider, setProvider] = useState<"gemini" | "openai">("gemini");
-
-  useEffect(() => {
-    setAnalysis(null);
-    setAnalyzing(false);
-  }, [logModal.run?._id]);
-
-  const handleAnalyze = async () => {
-    if (!logModal.run) return;
-    setAnalyzing(true);
-    try {
-        const res = await analyzeRun({
-            run_id: logModal.run._id,
-            stdout: liveLogs.stdout || logModal.run.stdout || "",
-            stderr: liveLogs.stderr || logModal.run.stderr || "",
-            exit_code: logModal.run.returncode || 1,
-            provider
-        });
-        setAnalysis(res.analysis);
-    } catch (e) {
-        console.error(e);
-    } finally {
-        setAnalyzing(false);
-    }
-  };
 
   useEffect(() => {
     if (!logModal.visible || !logModal.run) {
@@ -103,7 +79,7 @@ export function JobRuns({ jobId, runs: providedRuns, loading }: Props) {
       title: "Status",
       dataIndex: "status",
       key: "status",
-      render: (status: string) => <Tag color={status === "success" ? "green" : status === "running" ? "blue" : "volcano"}>{status}</Tag>,
+      render: (status: string) => <StatusBadge status={status} />,
     },
     { title: "Worker", dataIndex: "worker_id", key: "worker_id" },
     { title: "Slot", dataIndex: "slot", key: "slot" },
@@ -153,13 +129,11 @@ export function JobRuns({ jobId, runs: providedRuns, loading }: Props) {
       ) : (
         <Table dataSource={combinedRuns} columns={visibleColumns} loading={tableLoading} pagination={{ pageSize: 10 }} size="small" />
       )}
-      <Modal open={!!logModal?.visible} onCancel={() => setLogModal({ visible: false })} footer={null} width={900} title="Run Logs">
+      <Modal open={!!logModal?.visible} onCancel={() => setLogModal({ visible: false })} footer={null} width={1000} title="Run Logs">
         {logModal?.run ? (
           <Space direction="vertical" style={{ width: "100%" }}>
             <Space>
-              <Tag color={logModal.run.status === "success" ? "green" : logModal.run.status === "running" ? "blue" : "volcano"}>
-                {logModal.run.status}
-              </Tag>
+              <StatusBadge status={logModal.run.status} />
               <Typography.Text type="secondary">Run ID: {logModal.run._id}</Typography.Text>
               {logModal.run.worker_id && <Typography.Text type="secondary">Worker: {logModal.run.worker_id}</Typography.Text>}
             </Space>
@@ -173,40 +147,17 @@ export function JobRuns({ jobId, runs: providedRuns, loading }: Props) {
               {logModal.run.queue_latency_ms ? `${logModal.run.queue_latency_ms.toFixed(0)}ms` : "-"}
             </Typography.Text>
             <Divider />
-            <Typography.Paragraph>
-              <Typography.Text strong>Stdout:</Typography.Text>
-              <pre style={{ background: "#f5f5f5", padding: 12, maxHeight: 240, overflow: "auto" }}>
-                {liveLogs.stdout || "(no stdout)"}
-              </pre>
-              <Typography.Text type="secondary">Showing tail of last 4KB.</Typography.Text>
-            </Typography.Paragraph>
-            <Typography.Paragraph>
-              <Typography.Text strong>Stderr:</Typography.Text>
-              <pre style={{ background: "#f5f5f5", padding: 12, maxHeight: 240, overflow: "auto" }}>
-                {liveLogs.stderr || "(no stderr)"}
-              </pre>
-            </Typography.Paragraph>
-            {logModal.run.status === 'failed' && (
-                <div style={{ marginTop: 16 }}>
-                    <Space>
-                        <Select 
-                            value={provider} 
-                            onChange={setProvider} 
-                            options={[{label: 'Gemini', value: 'gemini'}, {label: 'OpenAI', value: 'openai'}]}
-                            style={{ width: 100 }}
-                        />
-                        <Button onClick={handleAnalyze} loading={analyzing} danger>Analyze Failure</Button>
-                    </Space>
-                    {analysis && (
-                        <Alert
-                            style={{ marginTop: 12 }}
-                            message="AI Analysis"
-                            description={<pre style={{ whiteSpace: 'pre-wrap' }}>{analysis}</pre>}
-                            type="warning"
-                            showIcon
-                        />
-                    )}
-                </div>
+            <LogViewer stdout={liveLogs.stdout} stderr={liveLogs.stderr} maxHeight={400} />
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              Showing tail of last 4KB. Live streaming for running jobs.
+            </Typography.Text>
+            {logModal.run.status === "failed" && (
+              <FailureInsight
+                runId={logModal.run._id}
+                stdout={liveLogs.stdout || logModal.run.stdout || ""}
+                stderr={liveLogs.stderr || logModal.run.stderr || ""}
+                exitCode={logModal.run.returncode || 1}
+              />
             )}
           </Space>
         ) : (

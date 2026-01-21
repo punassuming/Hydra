@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Row, Col, Card, Typography, Space, Button, Modal, Divider, Alert } from "antd";
+import { Row, Col, Card, Typography, Space, Button, Modal, Divider, Tabs } from "antd";
 import { JobForm } from "../components/JobForm";
 import { JobList } from "../components/JobList";
 import { JobRuns } from "../components/JobRuns";
@@ -11,6 +11,8 @@ import { useSchedulerEvents } from "../hooks/useEvents";
 import { createJob, fetchJobs, JobPayload, runAdhocJob, runJobNow, updateJob, validateJob } from "../api/jobs";
 import { WorkersMini } from "../components/WorkersMini";
 import { useActiveDomain } from "../context/ActiveDomainContext";
+import { JobsDashboard } from "../components/JobsDashboard";
+import { DashboardOutlined, UnorderedListOutlined } from "@ant-design/icons";
 
 export function HomePage() {
   const queryClient = useQueryClient();
@@ -120,17 +122,17 @@ export function HomePage() {
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
       <Card>
-        <Row justify="space-between" align="middle">
-          <Col>
-            <Typography.Title level={3} style={{ marginBottom: 0 }}>
+        <Row justify="space-between" align="middle" gutter={[16, 16]}>
+          <Col xs={24} md={16}>
+            <Typography.Title level={3} style={{ marginBottom: 8 }}>
               Hydra Jobs Control Plane
             </Typography.Title>
             <Typography.Text type="secondary">
               Submit, schedule, and inspect jobs across heterogeneous workers with queue/affinity aware placement.
             </Typography.Text>
           </Col>
-          <Col>
-            <Space>
+          <Col xs={24} md={8} style={{ textAlign: "right" }}>
+            <Space wrap>
               <Button type="primary" onClick={() => setModalVisible(true)}>
                 New Job
               </Button>
@@ -144,41 +146,51 @@ export function HomePage() {
           </Col>
         </Row>
         {statusMessage && (
-          <Typography.Paragraph style={{ marginTop: 16 }}>{statusMessage}</Typography.Paragraph>
+          <Typography.Paragraph style={{ marginTop: 16, marginBottom: 0 }}>{statusMessage}</Typography.Paragraph>
         )}
       </Card>
 
-      <Alert
-        type="info"
-        showIcon
-        message="Hydra stitches together priorities, affinities, and multiple executors (python, shell, batch, external). Use the nav to jump to Status (health), History (runs), Browse (jobs/runs), and Workers (capabilities)."
+      <Tabs
+        defaultActiveKey="dashboard"
+        items={[
+          {
+            key: "dashboard",
+            label: (
+              <span>
+                <DashboardOutlined /> Dashboard
+              </span>
+            ),
+            children: <JobsDashboard />,
+          },
+          {
+            key: "jobs",
+            label: (
+              <span>
+                <UnorderedListOutlined /> Jobs List
+              </span>
+            ),
+            children: (
+              <Space direction="vertical" size="large" style={{ width: "100%" }}>
+                <Card id="job-list" title="Jobs">
+                  <JobList
+                    jobs={jobs}
+                    loading={jobsQuery.isLoading}
+                    selectedId={selectedJobId}
+                    onSelect={(job) => setSelectedJobId(job._id)}
+                    onEdit={() => setModalVisible(true)}
+                  />
+                </Card>
+
+                <JobStatistics />
+
+                <JobOverview />
+
+                <WorkersMini />
+              </Space>
+            ),
+          },
+        ]}
       />
-
-      <Card>
-        <Typography.Title level={4}>How to use</Typography.Title>
-        <Typography.Paragraph>
-          1) Create or edit a job with executor, priority, schedule, and affinity. 2) Validate or run now (adhoc/manual). 3) Track
-          live runs from Status and logs modal (supports live streaming). 4) Inspect history or browse cross-job runs. 5) Tune
-          placement via affinity and worker capabilities under Workers.
-        </Typography.Paragraph>
-      </Card>
-
-      <Card id="job-list" title="Jobs">
-        <JobList
-          jobs={jobs}
-          loading={jobsQuery.isLoading}
-          selectedId={selectedJobId}
-          onSelect={(job) => setSelectedJobId(job._id)}
-          onEdit={() => setModalVisible(true)}
-        />
-      </Card>
-
-      <JobStatistics />
-
-      <JobOverview />
-
-      <WorkersMini />
-
 
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>
