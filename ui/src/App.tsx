@@ -100,9 +100,9 @@ function AppShell() {
                 <Typography.Text 
                   style={{ 
                     color: "#cbd5f5", 
-                    fontSize: "clamp(12px, 2vw, 14px)",
-                    display: window.innerWidth < 768 ? "none" : "inline"
+                    fontSize: "clamp(12px, 2vw, 14px)"
                   }}
+                  className="hide-on-mobile"
                 >
                   Jobs, tasks, and insights at a glance
                 </Typography.Text>
@@ -116,9 +116,9 @@ function AppShell() {
                 items={menuItems}
                 style={{ 
                   background: "transparent", 
-                  borderBottom: "none",
-                  minWidth: window.innerWidth < 768 ? "100%" : "auto"
+                  borderBottom: "none"
                 }}
+                className="responsive-menu"
               />
               <Space size={12} align="center" wrap>
                 <Tag color="cyan" style={{ marginRight: 0 }}>
@@ -137,10 +137,10 @@ function AppShell() {
         </Header>
         <Content
           style={{ 
-            padding: window.innerWidth < 768 ? 12 : 24, 
             background: darkMode ? "#0f172a" : "#f5f7fb",
             minHeight: "calc(100vh - 72px)"
           }}
+          className="main-content"
         >
           <Routes>
             <Route path="/" element={<HomePage />} />

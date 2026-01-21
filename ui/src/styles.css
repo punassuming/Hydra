@@ -111,3 +111,25 @@ textarea {
   font-size: 0.75rem;
   margin-right: 0.25rem;
 }
+
+/* Responsive styles */
+@media (max-width: 768px) {
+  .hide-on-mobile {
+    display: none !important;
+  }
+  
+  .main-content {
+    padding: 12px !important;
+  }
+  
+  .responsive-menu {
+    min-width: 100%;
+  }
+}
+
+@media (min-width: 769px) {
+  .main-content {
+    padding: 24px !important;
+  }
+}
+

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Card, Space, Typography, Button, Progress, Table } from "antd";
+import { Card, Space, Typography, Button, Progress, Table, Tag } from "antd";
 import { fetchJobOverview, runJobNow } from "../api/jobs";
 import { JobRun } from "../types";
 import { useActiveDomain } from "../context/ActiveDomainContext";
@@ -87,7 +87,7 @@ export function StatusPage() {
                 return (
                   <Space>
                     <Typography.Text strong>{job.name}</Typography.Text>
-                    <StatusBadge status={job.schedule_mode === "immediate" ? "queued" : job.schedule_mode} />
+                    <Tag color="default">{job.schedule_mode}</Tag>
                     {last && <StatusBadge status={last.status} />}
                   </Space>
                 );
