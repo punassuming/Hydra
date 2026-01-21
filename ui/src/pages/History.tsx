@@ -4,9 +4,9 @@ import { Table, Modal, Typography, Space, Card } from "antd";
 import { fetchHistory } from "../api/jobs";
 import { JobRun } from "../types";
 import { useActiveDomain } from "../context/ActiveDomainContext";
-import { StatusBadge } from "./StatusBadge";
-import { LogViewer } from "./LogViewer";
-import { FailureInsight } from "./FailureInsight";
+import { StatusBadge } from "../components/StatusBadge";
+import { LogViewer } from "../components/LogViewer";
+import { FailureInsight } from "../components/FailureInsight";
 
 export function HistoryPage() {
   const { domain } = useActiveDomain();
