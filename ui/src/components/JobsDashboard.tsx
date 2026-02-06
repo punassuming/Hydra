@@ -12,9 +12,11 @@ import {
   ClockCircleOutlined,
   AlertOutlined,
 } from "@ant-design/icons";
+import { useTheme } from "../theme";
 
 export function JobsDashboard() {
   const { domain } = useActiveDomain();
+  const { colors } = useTheme();
   const overviewQuery = useQuery({
     queryKey: ["job-overview", domain],
     queryFn: fetchJobOverview,
@@ -63,7 +65,7 @@ export function JobsDashboard() {
             loading={overviewQuery.isLoading}
             prefix={<CheckCircleOutlined />}
             tooltip="Percentage of successful runs"
-            valueStyle={{ color: "#52c41a" }}
+            valueStyle={{ color: colors.success }}
           />
         </Col>
         <Col xs={24} sm={12} md={6}>
@@ -73,7 +75,7 @@ export function JobsDashboard() {
             loading={overviewQuery.isLoading}
             prefix={<CloseCircleOutlined />}
             tooltip="Total number of failed runs"
-            valueStyle={{ color: "#f5222d" }}
+            valueStyle={{ color: colors.error }}
           />
         </Col>
         <Col xs={24} sm={12} md={6}>
@@ -83,7 +85,7 @@ export function JobsDashboard() {
             loading={historyQuery.isLoading}
             prefix={<SyncOutlined spin />}
             tooltip="Jobs currently running"
-            valueStyle={{ color: "#1890ff" }}
+            valueStyle={{ color: colors.info }}
           />
         </Col>
       </Row>
@@ -91,7 +93,7 @@ export function JobsDashboard() {
       <Card
         title={
           <Space>
-            <AlertOutlined style={{ color: "#f5222d" }} />
+            <AlertOutlined style={{ color: colors.error }} />
             <Typography.Text strong>Recently Failed Jobs</Typography.Text>
           </Space>
         }

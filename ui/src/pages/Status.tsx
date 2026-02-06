@@ -4,10 +4,12 @@ import { fetchJobOverview, runJobNow } from "../api/jobs";
 import { JobRun } from "../types";
 import { useActiveDomain } from "../context/ActiveDomainContext";
 import { StatusBadge } from "../components/StatusBadge";
+import { useTheme } from "../theme";
 
 export function StatusPage() {
   const queryClient = useQueryClient();
   const { domain } = useActiveDomain();
+  const { colors } = useTheme();
   const overviewQuery = useQuery({ queryKey: ["job-overview", domain], queryFn: fetchJobOverview, refetchInterval: 5000 });
 
   const runNow = useMutation({
@@ -21,7 +23,7 @@ export function StatusPage() {
     const recent = (runs ?? []).slice(0, 10);
     if (!recent.length) return <Typography.Text type="secondary">No runs yet</Typography.Text>;
     const color = (status?: string) =>
-      status === "success" ? "#16a34a" : status === "running" ? "#2563eb" : "#f97316";
+      status === "success" ? colors.success : status === "running" ? colors.info : colors.warning;
     return (
       <Space size={6}>
         {recent.map((run, idx) => (
@@ -55,7 +57,7 @@ export function StatusPage() {
             style={{
               width: 12,
               height: Math.max(6, (d / max) * 36),
-              background: "#38bdf8",
+              background: colors.primary,
               borderRadius: 4,
               opacity: 0.8,
             }}

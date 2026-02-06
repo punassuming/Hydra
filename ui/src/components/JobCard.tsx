@@ -9,6 +9,7 @@ import {
 } from "@ant-design/icons";
 import { JobDefinition } from "../types";
 import { StatusBadge } from "./StatusBadge";
+import { useTheme } from "../theme";
 
 interface JobCardProps {
   job: JobDefinition;
@@ -19,6 +20,7 @@ interface JobCardProps {
 }
 
 export function JobCard({ job, onRun, onEdit, selected, compact = false }: JobCardProps) {
+  const { colors } = useTheme();
   const nextRun = job.schedule?.next_run_at
     ? new Date(job.schedule.next_run_at).toLocaleString()
     : job.schedule?.mode === "immediate"
@@ -29,7 +31,7 @@ export function JobCard({ job, onRun, onEdit, selected, compact = false }: JobCa
     <Card
       hoverable
       style={{
-        borderColor: selected ? "#1890ff" : undefined,
+        borderColor: selected ? colors.info : undefined,
         borderWidth: selected ? 2 : 1,
       }}
       bodyStyle={{ padding: compact ? 16 : 24 }}

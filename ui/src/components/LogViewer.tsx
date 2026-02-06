@@ -1,5 +1,6 @@
 import { Typography, Space, Divider, Tabs } from "antd";
 import { CodeOutlined, BugOutlined } from "@ant-design/icons";
+import { useTheme } from "../theme";
 
 interface LogViewerProps {
   stdout?: string;
@@ -9,9 +10,11 @@ interface LogViewerProps {
 }
 
 export function LogViewer({ stdout, stderr, maxHeight = 300, showTabs = true }: LogViewerProps) {
+  const { colors } = useTheme();
+  
   const logStyle: React.CSSProperties = {
-    background: "#1e1e1e",
-    color: "#d4d4d4",
+    background: colors.logBg,
+    color: colors.logText,
     padding: 16,
     borderRadius: 6,
     maxHeight,
@@ -39,7 +42,7 @@ export function LogViewer({ stdout, stderr, maxHeight = 300, showTabs = true }: 
             <Typography.Text strong type="danger">
               <BugOutlined /> Standard Error
             </Typography.Text>
-            <pre style={{ ...logStyle, background: "#2e1e1e" }}>
+            <pre style={{ ...logStyle, background: colors.logErrorBg }}>
               {stderr || "(no errors)"}
             </pre>
           </>
@@ -66,7 +69,7 @@ export function LogViewer({ stdout, stderr, maxHeight = 300, showTabs = true }: 
         </span>
       ),
       children: (
-        <pre style={{ ...logStyle, background: "#2e1e1e" }}>
+        <pre style={{ ...logStyle, background: colors.logErrorBg }}>
           {stderr || "(no errors)"}
         </pre>
       ),

@@ -1,6 +1,7 @@
 import { Card, Statistic, Space, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ReactNode } from "react";
+import { useTheme } from "../theme";
 
 interface MetricCardProps {
   title: string;
@@ -26,6 +27,8 @@ export function MetricCard({
   trend,
   valueStyle,
 }: MetricCardProps) {
+  const { colors } = useTheme();
+  
   return (
     <Card loading={loading} hoverable style={{ height: "100%" }}>
       <Space direction="vertical" size="small" style={{ width: "100%" }}>
@@ -33,7 +36,7 @@ export function MetricCard({
           {title}
           {tooltip && (
             <Tooltip title={tooltip}>
-              <InfoCircleOutlined style={{ color: "#999" }} />
+              <InfoCircleOutlined style={{ color: colors.textDisabled }} />
             </Tooltip>
           )}
         </Space>
@@ -44,7 +47,7 @@ export function MetricCard({
           valueStyle={valueStyle}
         />
         {trend && (
-          <div style={{ fontSize: "12px", color: trend.isPositive ? "#52c41a" : "#f5222d" }}>
+          <div style={{ fontSize: "12px", color: trend.isPositive ? colors.success : colors.error }}>
             {trend.isPositive ? "↑" : "↓"} {Math.abs(trend.value)}%
           </div>
         )}
