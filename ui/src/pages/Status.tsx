@@ -1,12 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Card, Space, Tag, Typography, Button, Progress, Table } from "antd";
+import { Card, Space, Typography, Button, Progress, Table, Tag } from "antd";
 import { fetchJobOverview, runJobNow } from "../api/jobs";
 import { JobRun } from "../types";
 import { useActiveDomain } from "../context/ActiveDomainContext";
+import { StatusBadge } from "../components/StatusBadge";
+import { useTheme } from "../theme";
 
 export function StatusPage() {
   const queryClient = useQueryClient();
   const { domain } = useActiveDomain();
+  const { colors } = useTheme();
   const overviewQuery = useQuery({ queryKey: ["job-overview", domain], queryFn: fetchJobOverview, refetchInterval: 5000 });
 
   const runNow = useMutation({
@@ -20,7 +23,7 @@ export function StatusPage() {
     const recent = (runs ?? []).slice(0, 10);
     if (!recent.length) return <Typography.Text type="secondary">No runs yet</Typography.Text>;
     const color = (status?: string) =>
-      status === "success" ? "#16a34a" : status === "running" ? "#2563eb" : "#f97316";
+      status === "success" ? colors.success : status === "running" ? colors.info : colors.warning;
     return (
       <Space size={6}>
         {recent.map((run, idx) => (
@@ -54,7 +57,7 @@ export function StatusPage() {
             style={{
               width: 12,
               height: Math.max(6, (d / max) * 36),
-              background: "#38bdf8",
+              background: colors.primary,
               borderRadius: 4,
               opacity: 0.8,
             }}
@@ -86,12 +89,8 @@ export function StatusPage() {
                 return (
                   <Space>
                     <Typography.Text strong>{job.name}</Typography.Text>
-                    <Tag>{job.schedule_mode}</Tag>
-                    {last && (
-                      <Tag color={last.status === "success" ? "green" : last.status === "running" ? "blue" : "volcano"}>
-                        {last.status}
-                      </Tag>
-                    )}
+                    <Tag color="default">{job.schedule_mode}</Tag>
+                    {last && <StatusBadge status={last.status} />}
                   </Space>
                 );
               },

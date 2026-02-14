@@ -1,6 +1,9 @@
-import { Button, Card, Table, Tag } from "antd";
+import { Button, Card, Table, Tag, Space, Segmented, Row, Col } from "antd";
 import { Link } from "react-router-dom";
 import { JobDefinition } from "../types";
+import { JobCard } from "./JobCard";
+import { useState } from "react";
+import { AppstoreOutlined, UnorderedListOutlined } from "@ant-design/icons";
 
 interface Props {
   jobs?: JobDefinition[];
@@ -8,9 +11,12 @@ interface Props {
   selectedId?: string | null;
   loading?: boolean;
   onEdit?: () => void;
+  onRun?: (jobId: string) => void;
 }
 
-export function JobList({ jobs, onSelect, selectedId, loading, onEdit }: Props) {
+export function JobList({ jobs, onSelect, selectedId, loading, onEdit, onRun }: Props) {
+  const [viewMode, setViewMode] = useState<"table" | "card">("table");
+  
   const dataSource = (jobs ?? []).map((job) => ({ ...job, key: job._id }));
   const columns = [
     {
@@ -56,23 +62,63 @@ export function JobList({ jobs, onSelect, selectedId, loading, onEdit }: Props) 
   ];
 
   return (
-    <Card title="Jobs" bordered={false}>
-      <Table
-        dataSource={dataSource}
-        columns={columns}
-        loading={loading}
-        pagination={{ pageSize: 10 }}
-        size="small"
-        rowClassName={(record) => (record._id === selectedId ? "job-row-selected" : "job-row")}
-        onRow={(record) => ({
-          onClick: () => onSelect(record),
-          onDoubleClick: () => {
-            onSelect(record);
-            onEdit?.();
-          },
-          style: { cursor: "pointer" },
-        })}
-      />
+    <Card 
+      title={
+        <Space style={{ justifyContent: "space-between", width: "100%", flexWrap: "wrap" }}>
+          <span>Jobs</span>
+          <Segmented
+            value={viewMode}
+            onChange={(value) => setViewMode(value as "table" | "card")}
+            options={[
+              { label: "Table", value: "table", icon: <UnorderedListOutlined /> },
+              { label: "Cards", value: "card", icon: <AppstoreOutlined /> },
+            ]}
+          />
+        </Space>
+      }
+      bordered={false}
+      loading={loading}
+    >
+      {viewMode === "table" ? (
+        <Table
+          dataSource={dataSource}
+          columns={columns}
+          loading={loading}
+          pagination={{ pageSize: 10 }}
+          size="small"
+          rowClassName={(record) => (record._id === selectedId ? "job-row-selected" : "job-row")}
+          onRow={(record) => ({
+            onClick: () => onSelect(record),
+            onDoubleClick: () => {
+              onSelect(record);
+              onEdit?.();
+            },
+            style: { cursor: "pointer" },
+          })}
+          scroll={{ x: 800 }}
+        />
+      ) : (
+        <Row gutter={[16, 16]}>
+          {dataSource.map((job) => (
+            <Col xs={24} sm={12} md={8} lg={6} key={job._id}>
+              <div onClick={() => onSelect(job)}>
+                <JobCard
+                  job={job}
+                  selected={job._id === selectedId}
+                  onEdit={() => {
+                    onSelect(job);
+                    onEdit?.();
+                  }}
+                  onRun={() => {
+                    onSelect(job);
+                    onRun?.(job._id);
+                  }}
+                />
+              </div>
+            </Col>
+          ))}
+        </Row>
+      )}
     </Card>
   );
 }

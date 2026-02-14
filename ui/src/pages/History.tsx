@@ -1,9 +1,12 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Table, Tag, Modal, Typography, Space, Card } from "antd";
+import { Table, Modal, Typography, Space, Card } from "antd";
 import { fetchHistory } from "../api/jobs";
 import { JobRun } from "../types";
 import { useActiveDomain } from "../context/ActiveDomainContext";
+import { StatusBadge } from "../components/StatusBadge";
+import { LogViewer } from "../components/LogViewer";
+import { FailureInsight } from "../components/FailureInsight";
 
 export function HistoryPage() {
   const { domain } = useActiveDomain();
@@ -22,7 +25,7 @@ export function HistoryPage() {
       title: "Status",
       dataIndex: "status",
       key: "status",
-      render: (status: string) => <Tag color={status === "success" ? "green" : status === "running" ? "blue" : "volcano"}>{status}</Tag>,
+      render: (status: string) => <StatusBadge status={status} />,
     },
     { title: "Worker", dataIndex: "worker_id", key: "worker_id" },
     {
@@ -54,22 +57,32 @@ export function HistoryPage() {
       extra={<Typography.Text type="secondary">All runs across jobs. Open a run for logs; go to Jobs to edit definitions.</Typography.Text>}
     >
       <Table dataSource={runs} columns={columns} loading={isLoading} size="small" pagination={{ pageSize: 10 }} />
-      <Modal open={logModal.visible} onCancel={() => setLogModal({ visible: false })} footer={null} width={800} title="Run Logs">
+      <Modal open={logModal.visible} onCancel={() => setLogModal({ visible: false })} footer={null} width={1000} title="Run Logs">
         {logModal.run ? (
           <Space direction="vertical" style={{ width: "100%" }}>
-            <Typography.Text strong>Status: {logModal.run.status}</Typography.Text>
-            <Typography.Paragraph>
-              <Typography.Text strong>Stdout:</Typography.Text>
-              <pre style={{ background: "#f5f5f5", padding: 12, maxHeight: 200, overflow: "auto" }}>
-                {logModal.run.stdout_tail ?? logModal.run.stdout ?? "(no stdout)"}
-              </pre>
-            </Typography.Paragraph>
-            <Typography.Paragraph>
-              <Typography.Text strong>Stderr:</Typography.Text>
-              <pre style={{ background: "#f5f5f5", padding: 12, maxHeight: 200, overflow: "auto" }}>
-                {logModal.run.stderr_tail ?? logModal.run.stderr ?? "(no stderr)"}
-              </pre>
-            </Typography.Paragraph>
+            <Space>
+              <StatusBadge status={logModal.run.status} />
+              <Typography.Text type="secondary">Run ID: {logModal.run._id}</Typography.Text>
+              {logModal.run.worker_id && <Typography.Text type="secondary">Worker: {logModal.run.worker_id}</Typography.Text>}
+            </Space>
+            <Typography.Text>
+              Started: {logModal.run.start_ts ? new Date(logModal.run.start_ts).toLocaleString() : "-"} · 
+              Finished: {logModal.run.end_ts ? new Date(logModal.run.end_ts).toLocaleString() : "-"} · 
+              Duration: {typeof logModal.run.duration === "number" ? `${logModal.run.duration.toFixed(1)}s` : "-"}
+            </Typography.Text>
+            <LogViewer
+              stdout={logModal.run.stdout_tail ?? logModal.run.stdout}
+              stderr={logModal.run.stderr_tail ?? logModal.run.stderr}
+              maxHeight={400}
+            />
+            {logModal.run.status === "failed" && (
+              <FailureInsight
+                runId={logModal.run._id}
+                stdout={logModal.run.stdout || ""}
+                stderr={logModal.run.stderr || ""}
+                exitCode={logModal.run.returncode || 1}
+              />
+            )}
           </Space>
         ) : (
           <Typography.Text type="secondary">No logs available.</Typography.Text>

@@ -16,12 +16,13 @@ import { AuthPrompt } from "./components/AuthPrompt";
 import { hasAnyToken } from "./api/client";
 import { WorkerDetailPage } from "./pages/WorkerDetail";
 import { ActiveDomainProvider, useActiveDomain } from "./context/ActiveDomainContext";
+import { ThemeProvider, useTheme } from "./theme";
 
-function AppShell() {
+function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (dark: boolean) => void }) {
   const location = useLocation();
-  const [darkMode, setDarkMode] = useState(false);
   const [authOpen, setAuthOpen] = useState(!hasAnyToken());
   const { domain: activeDomain, setDomain: setActiveDomain } = useActiveDomain();
+  const { colors } = useTheme();
   const { Header, Content } = Layout;
   const menuItems = useMemo(
     () => [
@@ -61,7 +62,7 @@ function AppShell() {
       theme={{
         algorithm: darkMode ? theme.darkAlgorithm : theme.defaultAlgorithm,
         token: {
-          colorPrimary: "#2563eb",
+          colorPrimary: colors.primary,
           borderRadius: 6,
         },
       }}
@@ -76,7 +77,7 @@ function AppShell() {
             top: 0,
             zIndex: 1000,
             width: "100%",
-            background: darkMode ? "#050b18" : "#0f172a",
+            background: colors.headerBg,
           }}
         >
           <div
@@ -85,18 +86,25 @@ function AppShell() {
               alignItems: "center",
               justifyContent: "space-between",
               flexWrap: "wrap",
+              gap: "12px",
             }}
           >
-            <Space align="center">
-              <HydraLogo size={40} color="#38bdf8" />
-              <Space size={20} align="baseline">
+            <Space align="center" wrap>
+              <HydraLogo size={40} color={colors.primary} />
+              <Space size={12} align="baseline" style={{ flexWrap: "wrap" }}>
                 <Typography.Title
                   level={3}
-                  style={{ color: "#fff", margin: 0 }}
+                  style={{ color: colors.textPrimary, margin: 0, fontSize: "clamp(16px, 4vw, 24px)" }}
                 >
                   Hydra Scheduler
                 </Typography.Title>
-                <Typography.Text style={{ color: "#cbd5f5" }}>
+                <Typography.Text 
+                  style={{ 
+                    color: colors.textSecondary, 
+                    fontSize: "clamp(12px, 2vw, 14px)"
+                  }}
+                  className="hide-on-mobile"
+                >
                   Jobs, tasks, and insights at a glance
                 </Typography.Text>
               </Space>
@@ -107,16 +115,20 @@ function AppShell() {
                 mode="horizontal"
                 selectedKeys={[currentKey]}
                 items={menuItems}
-                style={{ background: "transparent", borderBottom: "none" }}
+                style={{ 
+                  background: "transparent", 
+                  borderBottom: "none"
+                }}
+                className="responsive-menu"
               />
-              <Space size={12} align="center">
+              <Space size={12} align="center" wrap>
                 <Tag color="cyan" style={{ marginRight: 0 }}>
                   Domain: {activeDomain}
                 </Tag>
                 <DomainSelector onChange={setActiveDomain} />
               </Space>
-              <Space>
-                <Typography.Text style={{ color: "#cbd5f5" }}>
+              <Space wrap>
+                <Typography.Text style={{ color: colors.textSecondary, fontSize: "14px" }}>
                   Dark Mode
                 </Typography.Text>
                 <AntSwitch checked={darkMode} onChange={setDarkMode} />
@@ -125,7 +137,11 @@ function AppShell() {
           </div>
         </Header>
         <Content
-          style={{ padding: 24, background: darkMode ? "#0f172a" : "#f5f7fb" }}
+          style={{ 
+            background: colors.bgSecondary,
+            minHeight: "calc(100vh - 72px)"
+          }}
+          className="main-content"
         >
           <Routes>
             <Route path="/" element={<HomePage />} />
@@ -151,9 +167,17 @@ function AppShell() {
 }
 
 export default function App() {
+  const [darkMode, setDarkMode] = useState(false);
+  
   return (
     <ActiveDomainProvider>
-      <AppShell />
+      <ThemeProvider isDarkMode={darkMode}>
+        <AppShellWrapper darkMode={darkMode} setDarkMode={setDarkMode} />
+      </ThemeProvider>
     </ActiveDomainProvider>
   );
+}
+
+function AppShellWrapper({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (dark: boolean) => void }) {
+  return <AppShell darkMode={darkMode} setDarkMode={setDarkMode} />;
 }
