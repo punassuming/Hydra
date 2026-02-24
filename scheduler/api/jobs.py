@@ -223,6 +223,9 @@ def update_job(job_id: str, updates: JobUpdate, request: Request):
     update_doc = updates.model_dump(exclude_unset=True)
     if not update_doc:
         raise HTTPException(status_code=400, detail="no fields to update")
+    # Non-admin users must not reassign a job to another domain.
+    if not is_admin:
+        update_doc.pop("domain", None)
     merged = {**existing, **update_doc}
     merged["updated_at"] = datetime.utcnow()
     job_def = JobDefinition.model_validate(merged)

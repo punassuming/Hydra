@@ -14,10 +14,13 @@ def list_workers(request: Request):
     is_admin = getattr(request.state, "is_admin", False)
     force_domain = request.query_params.get("domain")
     workers = []
-    if is_admin and not force_domain:
-        domains = [key.split(":")[1] for key in r.scan_iter("workers:*") if key.count(":") >= 2]
+    if not is_admin:
+        # Non-admin users are always scoped to their own domain; ignore any ?domain= override.
+        domains = [domain]
+    elif force_domain:
+        domains = [force_domain]
     else:
-        domains = [force_domain or domain]
+        domains = [key.split(":")[1] for key in r.scan_iter("workers:*") if key.count(":") >= 2]
     domains = list(set(domains))
     if not domains:
         domains = [domain]
