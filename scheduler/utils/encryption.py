@@ -7,14 +7,17 @@ and any worker that needs to decrypt credentials at runtime.
 
 Env:  CREDENTIAL_ENCRYPTION_KEY – base64-url-safe 32-byte key.
       If not provided, a deterministic key is derived from ADMIN_TOKEN
-      via PBKDF2 so the system works out of the box.
+      via PBKDF2 so the system works out of the box (a warning is logged).
 """
 
 import base64
 import hashlib
 import json
+import logging
 import os
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def _derive_key() -> bytes:
@@ -25,7 +28,15 @@ def _derive_key() -> bytes:
         if len(raw) == 32:
             return base64.urlsafe_b64encode(raw)
         raise ValueError("CREDENTIAL_ENCRYPTION_KEY must be 32 bytes (base64-url encoded)")
-    admin_token = os.getenv("ADMIN_TOKEN", "hydra-default-key")
+    admin_token = os.getenv("ADMIN_TOKEN", "")
+    if not admin_token:
+        raise ValueError(
+            "Credential encryption requires CREDENTIAL_ENCRYPTION_KEY or ADMIN_TOKEN to be set"
+        )
+    logger.warning(
+        "CREDENTIAL_ENCRYPTION_KEY not set; deriving key from ADMIN_TOKEN. "
+        "Set CREDENTIAL_ENCRYPTION_KEY for production use."
+    )
     derived = hashlib.pbkdf2_hmac("sha256", admin_token.encode(), b"hydra-credential-salt", 100_000)
     return base64.urlsafe_b64encode(derived)
 

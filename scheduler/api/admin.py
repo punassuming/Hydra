@@ -243,6 +243,6 @@ def resolve_credential(name: str, request: Request):
         raise HTTPException(status_code=404, detail="credential not found")
     try:
         decrypted = decrypt_payload(doc["encrypted_payload"])
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"decryption failed: {exc}")
+    except Exception:
+        raise HTTPException(status_code=500, detail="decryption failed; check encryption key configuration")
     return {"name": name, "credential_type": doc.get("credential_type"), **decrypted}

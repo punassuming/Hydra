@@ -212,16 +212,26 @@ def test_detect_capabilities():
 
 
 def test_encrypt_decrypt_roundtrip():
-    data = {"connection_uri": "postgresql://user:pass@host/db", "password": "s3cret"}
-    token = encrypt_payload(data)
-    assert isinstance(token, str)
-    decrypted = decrypt_payload(token)
-    assert decrypted == data
+    import os
+    os.environ["ADMIN_TOKEN"] = "test-admin-token"
+    try:
+        data = {"connection_uri": "postgresql://user:pass@host/db", "password": "s3cret"}
+        token = encrypt_payload(data)
+        assert isinstance(token, str)
+        decrypted = decrypt_payload(token)
+        assert decrypted == data
+    finally:
+        os.environ.pop("ADMIN_TOKEN", None)
 
 
 def test_encrypt_produces_different_tokens():
-    data = {"key": "value"}
-    t1 = encrypt_payload(data)
-    t2 = encrypt_payload(data)
-    # Fernet includes timestamp + IV, so tokens differ even for same input
-    assert t1 != t2
+    import os
+    os.environ["ADMIN_TOKEN"] = "test-admin-token"
+    try:
+        data = {"key": "value"}
+        t1 = encrypt_payload(data)
+        t2 = encrypt_payload(data)
+        # Fernet includes timestamp and initialization vector (IV), so tokens differ even for same input
+        assert t1 != t2
+    finally:
+        os.environ.pop("ADMIN_TOKEN", None)
