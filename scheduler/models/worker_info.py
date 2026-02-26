@@ -21,4 +21,9 @@ class WorkerInfo(BaseModel):
     subnet: Optional[str] = None
     deployment_type: Optional[str] = None
     run_user: Optional[str] = None
+    process_count: Optional[int] = None
+    memory_rss_mb: Optional[float] = None
+    process_count_max_30m: Optional[int] = None
+    memory_rss_mb_max_30m: Optional[float] = None
+    metrics_updated_at: Optional[float] = None
     running_jobs: List[str] = Field(default_factory=list)

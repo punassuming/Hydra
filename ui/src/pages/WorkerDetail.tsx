@@ -64,6 +64,33 @@ export function WorkerDetailPage() {
           </Card>
         </Col>
       </Row>
+      <Row gutter={16}>
+        <Col xs={24} md={8}>
+          <Card>
+            <Statistic title="Memory RSS" value={worker.memory_rss_mb != null ? `${worker.memory_rss_mb.toFixed(1)} MB` : "-"} />
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card>
+            <Statistic
+              title="Memory RSS Max (30m)"
+              value={worker.memory_rss_mb_max_30m != null ? `${worker.memory_rss_mb_max_30m.toFixed(1)} MB` : "-"}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card>
+            <Statistic
+              title="Process Count (Now / 30m Max)"
+              value={
+                worker.process_count != null || worker.process_count_max_30m != null
+                  ? `${worker.process_count ?? "-"} / ${worker.process_count_max_30m ?? "-"}`
+                  : "-"
+              }
+            />
+          </Card>
+        </Col>
+      </Row>
 
       <Card title="Details">
         <Descriptions bordered column={1} size="small">
@@ -77,6 +104,9 @@ export function WorkerDetailPage() {
           <Descriptions.Item label="Run User">{worker.run_user || "-"}</Descriptions.Item>
           <Descriptions.Item label="Last heartbeat">
             {worker.last_heartbeat ? new Date(worker.last_heartbeat).toLocaleString() : "-"}
+          </Descriptions.Item>
+          <Descriptions.Item label="Metrics updated">
+            {worker.metrics_updated_at ? new Date(worker.metrics_updated_at * 1000).toLocaleString() : "-"}
           </Descriptions.Item>
         </Descriptions>
       </Card>

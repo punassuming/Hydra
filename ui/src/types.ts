@@ -197,6 +197,11 @@ export interface WorkerInfo {
   cpu_count?: number;
   python_version?: string;
   cwd?: string;
+  process_count?: number;
+  memory_rss_mb?: number;
+  process_count_max_30m?: number;
+  memory_rss_mb_max_30m?: number;
+  metrics_updated_at?: number;
   running_jobs?: string[];
 }
 

@@ -49,6 +49,40 @@ export function WorkersPage() {
       ),
     },
     {
+      title: "Memory (30m)",
+      key: "memory",
+      render: (_: unknown, record: WorkerInfo) => {
+        const current = record.memory_rss_mb;
+        const max30 = record.memory_rss_mb_max_30m;
+        if (current == null && max30 == null) return "-";
+        return (
+          <Tooltip title={`Current ${current?.toFixed(1) ?? "-"} MB, 30m max ${max30?.toFixed(1) ?? "-"} MB`}>
+            <div>
+              {current?.toFixed(1) ?? "-"} MB
+              {max30 != null ? ` / ${max30.toFixed(1)} MB max` : ""}
+            </div>
+          </Tooltip>
+        );
+      },
+    },
+    {
+      title: "Processes (30m)",
+      key: "process_count",
+      render: (_: unknown, record: WorkerInfo) => {
+        const current = record.process_count;
+        const max30 = record.process_count_max_30m;
+        if (current == null && max30 == null) return "-";
+        return (
+          <Tooltip title={`Current ${current ?? "-"} processes, 30m max ${max30 ?? "-"}`}>
+            <div>
+              {current ?? "-"}
+              {max30 != null ? ` / ${max30} max` : ""}
+            </div>
+          </Tooltip>
+        );
+      },
+    },
+    {
       title: "Concurrency",
       key: "concurrency",
       render: (_: unknown, record: WorkerInfo) => (
