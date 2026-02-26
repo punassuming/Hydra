@@ -5,6 +5,7 @@ import hashlib
 from ..redis_client import get_redis
 from ..mongo_client import get_db
 from ..examples.templates import TEMPLATES
+from ..utils.redis_acl import ensure_worker_acl_user, delete_worker_acl_user, worker_acl_username
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -31,6 +32,7 @@ def list_domains(request: Request) -> Dict[str, List[Dict]]:
                 "domain": d,
                 "display_name": meta.get(d, {}).get("display_name", d),
                 "description": meta.get(d, {}).get("description", ""),
+                "worker_redis_acl_user": worker_acl_username(d),
                 "jobs_count": jobs_count,
                 "runs_count": runs_count,
                 "workers_count": workers_count,
@@ -59,7 +61,8 @@ def create_domain(payload: Dict, request: Request):
         {"$set": {"display_name": display, "description": desc, "token_hash": token_hash}},
         upsert=True,
     )
-    return {"ok": True, "domain": domain, "token": token}
+    redis_acl = ensure_worker_acl_user(domain)
+    return {"ok": True, "domain": domain, "token": token, "worker_redis_acl": redis_acl}
 
 
 @router.put("/domains/{domain}")
@@ -112,7 +115,19 @@ def delete_domain(domain: str, request: Request):
     if token_hash:
         r.delete(f"token_hash:{token_hash}:domain")
     r.delete(f"token_hash:{domain}")
+    delete_worker_acl_user(domain)
     return {"ok": True}
+
+
+@router.post("/domains/{domain}/redis_acl/rotate")
+def rotate_worker_redis_acl(domain: str, request: Request):
+    _require_admin(request)
+    db = get_db()
+    doc = db.domains.find_one({"domain": domain})
+    if not doc:
+        raise HTTPException(status_code=404, detail="domain not found")
+    redis_acl = ensure_worker_acl_user(domain)
+    return {"ok": True, "domain": domain, "worker_redis_acl": redis_acl}
 
 
 @router.get("/job_templates")

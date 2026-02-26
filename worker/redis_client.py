@@ -61,5 +61,12 @@ def get_redis() -> redis.Redis:
             _redis_client = sentinel.master_for(sentinel_master, **master_kwargs)
         else:
             url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-            _redis_client = redis.from_url(url, decode_responses=True)
+            kwargs = {"decode_responses": True}
+            redis_username = os.getenv("REDIS_USERNAME")
+            redis_password = os.getenv("REDIS_PASSWORD")
+            if redis_username:
+                kwargs["username"] = redis_username
+            if redis_password:
+                kwargs["password"] = redis_password
+            _redis_client = redis.from_url(url, **kwargs)
     return _redis_client

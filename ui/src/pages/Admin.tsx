@@ -1,6 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, Form, Input, Space, Table, Typography, Button, message, Modal, Input as AntInput, Select } from "antd";
-import { fetchDomains, createDomain, updateDomain, DomainInfo, rotateDomainToken, fetchTemplates, importTemplate, deleteDomain } from "../api/admin";
+import {
+  fetchDomains,
+  createDomain,
+  updateDomain,
+  DomainInfo,
+  rotateDomainToken,
+  rotateDomainWorkerRedisAcl,
+  fetchTemplates,
+  importTemplate,
+  deleteDomain,
+  WorkerRedisAclInfo,
+} from "../api/admin";
 import { setTokenForDomain, getEffectiveToken, withTempToken, hasTokenForDomain, getAdminToken } from "../api/client";
 import { createJob } from "../api/jobs";
 import { useEffect, useState } from "react";
@@ -10,6 +21,7 @@ export function AdminPage() {
   const queryClient = useQueryClient();
   const domainsQuery = useQuery({ queryKey: ["domains"], queryFn: fetchDomains, refetchInterval: 5000 });
   const [tokenModal, setTokenModal] = useState<{ open: boolean; token?: string; domain?: string }>({ open: false });
+  const [redisAclModal, setRedisAclModal] = useState<{ open: boolean; domain?: string; acl?: WorkerRedisAclInfo }>({ open: false });
   const [switchModal, setSwitchModal] = useState<{ open: boolean; domain?: string; token?: string }>({ open: false });
   const [importText, setImportText] = useState("");
   const [importing, setImporting] = useState(false);
@@ -22,6 +34,15 @@ export function AdminPage() {
     onSuccess: (data) => {
       message.success("Token rotated");
       setTokenModal({ open: true, token: data.token, domain: data.domain });
+      queryClient.invalidateQueries({ queryKey: ["domains"] });
+    },
+    onError: (err: Error) => message.error(err.message),
+  });
+  const rotateWorkerAclMut = useMutation({
+    mutationFn: (domain: string) => rotateDomainWorkerRedisAcl(domain),
+    onSuccess: (data) => {
+      setRedisAclModal({ open: true, domain: data.domain, acl: data.worker_redis_acl });
+      message.success(`Worker Redis ACL rotated for ${data.domain}`);
       queryClient.invalidateQueries({ queryKey: ["domains"] });
     },
     onError: (err: Error) => message.error(err.message),
@@ -102,6 +123,9 @@ export function AdminPage() {
       } else {
         message.success("Domain created");
       }
+      if ((data as any)?.worker_redis_acl) {
+        setRedisAclModal({ open: true, domain: data.domain, acl: (data as any).worker_redis_acl });
+      }
       queryClient.invalidateQueries({ queryKey: ["domains"] });
     },
     onError: (err: Error) => message.error(err.message),
@@ -136,6 +160,9 @@ export function AdminPage() {
           </Button>
           <Button size="small" onClick={() => rotateMut.mutate(record.domain)}>
             Rotate Token
+          </Button>
+          <Button size="small" onClick={() => rotateWorkerAclMut.mutate(record.domain)} loading={rotateWorkerAclMut.isPending}>
+            Rotate Worker Redis ACL
           </Button>
           <Button
             size="small"
@@ -179,10 +206,16 @@ export function AdminPage() {
           <Typography.Text>
             1) Create or rotate a domain token in this page. 2) Start worker with that domain + token.
           </Typography.Text>
+          <Typography.Text>
+            Optional hardening: rotate worker Redis ACL and run worker with <Typography.Text code>REDIS_USERNAME</Typography.Text> +{" "}
+            <Typography.Text code>REDIS_PASSWORD</Typography.Text> for domain-scoped Redis access only.
+          </Typography.Text>
           <Typography.Paragraph style={{ marginBottom: 0 }}>
             <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
 {`WORKER_DOMAIN=${activeDomain} API_TOKEN=<domain_token> \\
-REDIS_URL=redis://localhost:6379/0 MONGO_URL=mongodb://localhost:27017 \\
+REDIS_URL=redis://localhost:6379/0 \\
+REDIS_USERNAME=<worker_redis_acl_username> REDIS_PASSWORD=<worker_redis_acl_password> \\
+MONGO_URL=mongodb://localhost:27017 \\
 docker compose -f docker-compose.worker.yml up --build`}
             </pre>
           </Typography.Paragraph>
@@ -407,6 +440,32 @@ docker compose -f docker-compose.worker.yml up --build`}
         <Space direction="vertical" style={{ width: "100%" }}>
           <Typography.Text strong>Copy this token for workers and client access:</Typography.Text>
           <Typography.Paragraph code>{tokenModal.token ?? "(no token provided)"}</Typography.Paragraph>
+        </Space>
+      </Modal>
+      <Modal
+        open={redisAclModal.open}
+        footer={null}
+        onCancel={() => setRedisAclModal({ open: false })}
+        title={`Worker Redis ACL${redisAclModal.domain ? ` – ${redisAclModal.domain}` : ""}`}
+      >
+        <Space direction="vertical" style={{ width: "100%" }}>
+          <Typography.Text strong>Use these for workers in this domain:</Typography.Text>
+          <Typography.Paragraph style={{ marginBottom: 0 }}>
+            <Typography.Text code>REDIS_USERNAME={redisAclModal.acl?.username ?? "-"}</Typography.Text>
+          </Typography.Paragraph>
+          <Typography.Paragraph copyable={{ text: redisAclModal.acl?.password ?? "" }} style={{ marginBottom: 0 }}>
+            <Typography.Text code>REDIS_PASSWORD={redisAclModal.acl?.password ?? "-"}</Typography.Text>
+          </Typography.Paragraph>
+          <Typography.Text type="secondary">Worker startup example:</Typography.Text>
+          <Typography.Paragraph style={{ marginBottom: 0 }}>
+            <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
+{`WORKER_DOMAIN=${redisAclModal.domain ?? activeDomain} API_TOKEN=<domain_token> \\
+REDIS_URL=redis://localhost:6379/0 \\
+REDIS_USERNAME=${redisAclModal.acl?.username ?? "<worker_redis_acl_username>"} \\
+REDIS_PASSWORD=<worker_redis_acl_password> \\
+docker compose -f docker-compose.worker.yml up --build`}
+            </pre>
+          </Typography.Paragraph>
         </Space>
       </Modal>
       <Modal

@@ -26,12 +26,14 @@ Hydra Jobs is a distributed job runner designed for flexibility and scalability.
 ## Workflow & Architecture (Internal Details)
 
 - Scheduler (`scheduler/`) runs three background loops: `scheduling_loop` dispatches jobs from `job_queue:<domain>:pending` to `job_queue:<domain>:<worker_id>`, `failover_loop` requeues jobs from offline workers, and `schedule_trigger_loop` advances cron/interval jobs. API auth is enforced via `ADMIN_TOKEN` or domain tokens hashed in Mongo/Redis, and non-admin requests must include both domain + token.
+- Scheduler admin API can provision domain-scoped Redis ACL worker users (`/admin/domains/{domain}/redis_acl/rotate`) and returns `REDIS_USERNAME` + `REDIS_PASSWORD` for worker startup.
 - Scheduler worker APIs include:
   - `GET /workers/` with runtime + 30m metrics summary (memory/process/load), running jobs, and running users.
   - `GET /workers/{worker_id}/metrics` for time-series points.
   - `GET /workers/{worker_id}/timeline` for per-worker execution spans (for Gantt/timeline UI).
   - `POST /workers/{worker_id}/state` with JSON body `{ "state": "online|draining|disabled" }`.
 - Worker (`worker/`) registers itself in Redis with tags/allowed users/domain token hash, heartbeats every 2s, BLPOPs its queue, tracks `current_running`/`worker_running_set`, streams logs to Redis (per-domain channels), and writes run docs to Mongo via `record_run_start`/`record_run_end`.
+- Worker no longer mutates global domain registry keys; worker Redis writes are domain-scoped to heartbeat/status/queue/log keys.
 - Worker heartbeat stores rolling metrics in Redis (`worker_metrics:<domain>:<worker_id>:history`) including `memory_rss_mb`, `process_count`, and Linux load averages.
 - Jobs support `bypass_concurrency`; scheduler can dispatch these even when workers are at quota, and workers execute them outside normal `ThreadPoolExecutor` limits.
 - Executors support Linux-only impersonation and Kerberos bootstrap: `executor.impersonate_user` and `executor.kerberos.{principal,keytab,ccache}`.
@@ -123,6 +125,8 @@ Located in `scripts/`:
 *   `worker-up.sh`: Helper to start a worker.
 *   `build-images.sh`: Builds Docker images.
 *   `create-domain.sh`: Creates a new domain via the API.
+*   `provision-redis-acl.sh`: Rotates/provisions domain worker Redis ACL credentials via admin API.
+*   `configure-external-redis-acl.sh`: Configures domain worker ACL user directly on an external Redis server via `redis-cli`.
 
 ## Testing
 
@@ -164,6 +168,7 @@ Located in `scripts/`:
 
 - `WORKER_DOMAIN` — Domain the worker belongs to
 - `WORKER_DOMAIN_TOKEN` (or `API_TOKEN`) — Authentication token for the worker
+- `REDIS_USERNAME` / `REDIS_PASSWORD` — Recommended domain-scoped worker Redis ACL credentials
 - `WORKER_ID` — Unique worker identifier
 - `WORKER_TAGS` — Tags for worker affinity
 - `ALLOWED_USERS` — Users allowed to submit jobs to this worker

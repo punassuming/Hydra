@@ -7,9 +7,11 @@ services:
       - .env
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - REDIS_USERNAME=${REDIS_USERNAME:-}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - MONGO_URL=${MONGO_URL:-mongodb://mongo:27017}
       - MONGO_DB=${MONGO_DB:-hydra_jobs}
-      - WORKER_ID=${WORKER_ID:-worker-standalone}
+      - WORKER_ID=${WORKER_ID:-}
       - WORKER_DOMAIN=${WORKER_DOMAIN:-prod}
       - API_TOKEN=${API_TOKEN}
       - WORKER_TAGS=${WORKER_TAGS:-}

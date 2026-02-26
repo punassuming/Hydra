@@ -54,7 +54,6 @@ def register_worker(worker_id: str, max_concurrency: int):
         "run_user": getpass.getuser(),
         "domain_token_hash": __import__("hashlib").sha256(domain_token.encode()).hexdigest(),
     }
-    r.sadd("hydra:domains", get_domain())
     r.hset(f"workers:{get_domain()}:{worker_id}", mapping=meta)
 
 
@@ -77,11 +76,12 @@ def worker_main():
 
     executor = ThreadPoolExecutor(max_workers=max_concurrency)
 
-    def run_job(job_id: str):
+    def run_job(job_id: str, bypass_override: bool = False):
         try:
             job = db.job_definitions.find_one({"_id": job_id})
             if not job:
                 return
+            bypass_concurrency = bool(job.get("bypass_concurrency", False) or bypass_override)
             with active_jobs_lock:
                 active_jobs.add(job_id)
             slot_position = incr_running(worker_id, +1) - 1
@@ -93,7 +93,13 @@ def worker_main():
 
             # Create/mark run start
             retries_remaining = int(job.get("retries", 0))
-            run_id = record_run_start(job, worker_id, slot_position, retries_remaining)
+            run_id = record_run_start(
+                job,
+                worker_id,
+                slot_position,
+                retries_remaining,
+                bypass_concurrency=bypass_concurrency,
+            )
 
             def stream_log(kind: str, chunk: str):
                 if not chunk:
@@ -152,7 +158,12 @@ def worker_main():
         if not item:
             continue
         _, job_id = item
-        executor.submit(run_job, job_id)
+        job_meta = db.job_definitions.find_one({"_id": job_id}, {"bypass_concurrency": 1})
+        bypass_concurrency = bool((job_meta or {}).get("bypass_concurrency", False))
+        if bypass_concurrency:
+            threading.Thread(target=run_job, args=(job_id, True), daemon=True).start()
+        else:
+            executor.submit(run_job, job_id, False)
 
 
 if __name__ == "__main__":
