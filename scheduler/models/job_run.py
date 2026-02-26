@@ -27,6 +27,7 @@ class JobRun(BaseModel):
     queue_latency_ms: Optional[float] = None
     completion_reason: Optional[str] = None
     duration: Optional[float] = None
+    bypass_concurrency: Optional[bool] = None
 
     class Config:
         populate_by_name = True

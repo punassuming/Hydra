@@ -1,5 +1,5 @@
-import { Alert, Button, Select, Space, Spin, Typography } from "antd";
-import { BugOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { Alert, Button, Input, Select, Space, Spin, Typography } from "antd";
+import { BugOutlined, ThunderboltOutlined, QuestionCircleOutlined } from "@ant-design/icons";
 import { useState } from "react";
 import { analyzeRun } from "../api/jobs";
 
@@ -21,6 +21,8 @@ export function FailureInsight({
   const [analysis, setAnalysis] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [provider, setProvider] = useState<"gemini" | "openai">("gemini");
+  const [analysisType, setAnalysisType] = useState<"failure" | "summary" | "errors" | "retry" | "custom">("failure");
+  const [question, setQuestion] = useState("");
 
   const handleAnalyze = async () => {
     setAnalyzing(true);
@@ -31,6 +33,8 @@ export function FailureInsight({
         stderr,
         exit_code: exitCode,
         provider,
+        analysis_type: analysisType,
+        question: analysisType === "custom" ? question : undefined,
       });
       setAnalysis(res.analysis);
     } catch (e) {
@@ -47,7 +51,7 @@ export function FailureInsight({
         message={
           <Space>
             <BugOutlined />
-            AI Failure Analysis ({provider.toUpperCase()})
+            AI Log Assistant ({provider.toUpperCase()} · {analysisType})
           </Space>
         }
         description={
@@ -83,8 +87,8 @@ export function FailureInsight({
 
   return (
     <div style={{ marginTop: 12 }}>
-      <Space>
-        {!compact && (
+      <Space direction="vertical" style={{ width: "100%" }} size={8}>
+        <Space wrap>
           <Select
             value={provider}
             onChange={setProvider}
@@ -92,17 +96,42 @@ export function FailureInsight({
               { label: "Gemini", value: "gemini" },
               { label: "OpenAI", value: "openai" },
             ]}
-            style={{ width: 100 }}
+            style={{ width: 110 }}
           />
-        )}
+          <Select
+            value={analysisType}
+            onChange={(value) => setAnalysisType(value)}
+            options={[
+              { label: "Fix Failure", value: "failure" },
+              { label: "Summarize", value: "summary" },
+              { label: "Extract Errors", value: "errors" },
+              { label: "Retry Tuning", value: "retry" },
+              { label: "Custom", value: "custom" },
+            ]}
+            style={{ width: compact ? 150 : 190 }}
+          />
+          {analysisType === "custom" && (
+            <Input
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              prefix={<QuestionCircleOutlined />}
+              placeholder="Ask about this run"
+              style={{ width: compact ? 220 : 340 }}
+            />
+          )}
+        </Space>
         <Button
           onClick={handleAnalyze}
           loading={analyzing}
-          danger
           icon={analyzing ? <Spin size="small" /> : <ThunderboltOutlined />}
         >
-          {analyzing ? "Analyzing..." : compact ? "Analyze" : "Analyze Failure"}
+          {analyzing ? "Analyzing..." : compact ? "Analyze Logs" : "Run AI Log Analysis"}
         </Button>
+        {!compact && (
+          <Typography.Text type="secondary">
+            Use this assistant to summarize logs, extract root errors, and suggest retry/timeout tuning.
+          </Typography.Text>
+        )}
       </Space>
     </div>
   );

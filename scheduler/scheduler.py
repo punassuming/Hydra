@@ -2,6 +2,7 @@ import os
 import threading
 import time
 import hashlib
+import json
 from datetime import datetime
 from typing import Dict, List
 
@@ -13,6 +14,7 @@ from .utils.affinity import passes_affinity
 from .utils.selectors import select_best_worker
 from .utils.failover import failover_once
 from .utils.logging import setup_logging
+from .utils.worker_ops import append_worker_op
 from .event_bus import event_bus
 from .models.job_definition import ScheduleConfig
 from .utils.schedule import advance_schedule
@@ -21,7 +23,17 @@ from .utils.schedule import advance_schedule
 log = setup_logging("scheduler")
 
 
-def list_online_workers(ttl_seconds: int, domain: str) -> List[Dict]:
+def _json_ready(value):
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {k: _json_ready(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_ready(v) for v in value]
+    return value
+
+
+def list_online_workers(ttl_seconds: int, domain: str, respect_capacity: bool = True) -> List[Dict]:
     r = get_redis()
     now = time.time()
     workers: List[Dict] = []
@@ -54,7 +66,7 @@ def list_online_workers(ttl_seconds: int, domain: str) -> List[Dict]:
         # Only accept workers with available slots
         if worker["state"] != "online":
             continue
-        if worker["current_running"] < worker["max_concurrency"]:
+        if (not respect_capacity) or (worker["current_running"] < worker["max_concurrency"]):
             workers.append(worker)
     return workers
 
@@ -78,9 +90,15 @@ def scheduling_loop(stop_event: threading.Event):
                 log.error("Received job_id %s with no definition; skipping", job_id)
                 continue
             domain = job.get("domain", domain)
+            bypass_concurrency = bool(job.get("bypass_concurrency", False))
+            meta_key = f"job_enqueue_meta:{domain}:{job_id}"
+            meta = r.hgetall(meta_key) or {}
+            enqueued_ts = float(meta.get("enqueued_ts", time.time()))
+            enqueue_reason = meta.get("reason")
+            r.delete(meta_key)
             candidates = [
                 w
-                for w in list_online_workers(ttl, domain)
+                for w in list_online_workers(ttl, domain, respect_capacity=not bypass_concurrency)
                 if passes_affinity(job, w)
             ]
             worker = select_best_worker(candidates)
@@ -88,14 +106,49 @@ def scheduling_loop(stop_event: threading.Event):
                 # No worker matches; requeue and backoff
                 log.warning("No eligible worker for job %s; requeuing", job_id)
                 r.zadd(f"job_queue:{domain}:pending", {job_id: float(job.get("priority", 5))})
+                r.hset(
+                    meta_key,
+                    mapping={
+                        "enqueued_ts": enqueued_ts,
+                        "reason": enqueue_reason or "no_worker",
+                    },
+                )
+                r.expire(meta_key, 24 * 3600)
                 event_bus.publish("job_pending", {"job_id": job_id, "reason": "no_worker", "domain": domain})
                 time.sleep(1)
                 continue
             wid = worker["worker_id"]
-            r.rpush(f"job_queue:{domain}:{wid}", job_id)
+            envelope = {
+                "job_id": job_id,
+                "domain": domain,
+                "job": _json_ready(job),
+                "enqueued_ts": enqueued_ts,
+                "dispatch_ts": time.time(),
+                "enqueue_reason": enqueue_reason,
+            }
+            r.rpush(f"job_queue:{domain}:{wid}", json.dumps(envelope))
+            append_worker_op(
+                domain=domain,
+                worker_id=wid,
+                op_type="dispatch",
+                message=f"Job {job_id} dispatched",
+                details={
+                    "job_id": job_id,
+                    "bypass_concurrency": bypass_concurrency,
+                    "enqueue_reason": enqueue_reason,
+                },
+            )
             # Mark a pending run exists (worker updates on start)
-            event_bus.publish("job_dispatched", {"job_id": job_id, "worker_id": wid, "domain": domain})
-            log.info("Dispatched job %s to worker %s", job_id, wid)
+            event_bus.publish(
+                "job_dispatched",
+                {
+                    "job_id": job_id,
+                    "worker_id": wid,
+                    "domain": domain,
+                    "bypass_concurrency": bypass_concurrency,
+                },
+            )
+            log.info("Dispatched job %s to worker %s (bypass_concurrency=%s)", job_id, wid, bypass_concurrency)
         except Exception as e:
             log.exception("Error in scheduling loop: %s", e)
             time.sleep(1)

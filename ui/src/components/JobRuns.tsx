@@ -151,14 +151,12 @@ export function JobRuns({ jobId, runs: providedRuns, loading }: Props) {
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               Showing tail of last 4KB. Live streaming for running jobs.
             </Typography.Text>
-            {logModal.run.status === "failed" && (
-              <FailureInsight
-                runId={logModal.run._id}
-                stdout={liveLogs.stdout || logModal.run.stdout || ""}
-                stderr={liveLogs.stderr || logModal.run.stderr || ""}
-                exitCode={logModal.run.returncode || 1}
-              />
-            )}
+            <FailureInsight
+              runId={logModal.run._id}
+              stdout={liveLogs.stdout || logModal.run.stdout || ""}
+              stderr={liveLogs.stderr || logModal.run.stderr || ""}
+              exitCode={logModal.run.returncode || 1}
+            />
           </Space>
         ) : (
           <Typography.Text type="secondary">No logs available.</Typography.Text>

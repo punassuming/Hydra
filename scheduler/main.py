@@ -14,6 +14,7 @@ from .api.logs import router as logs_router
 from .api.admin import router as admin_router
 from .api.ai import router as ai_router
 from .scheduler import scheduling_loop, failover_loop, schedule_trigger_loop
+from .run_events import run_event_loop
 from .utils.logging import setup_logging
 from .utils.auth import enforce_api_key
 from .redis_client import get_redis
@@ -96,9 +97,11 @@ def on_startup():
     app.state.scheduler_thread = threading.Thread(target=scheduling_loop, args=(stop_event,), daemon=True)
     app.state.failover_thread = threading.Thread(target=failover_loop, args=(stop_event,), daemon=True)
     app.state.schedule_thread = threading.Thread(target=schedule_trigger_loop, args=(stop_event,), daemon=True)
+    app.state.run_event_thread = threading.Thread(target=run_event_loop, args=(stop_event,), daemon=True)
     app.state.scheduler_thread.start()
     app.state.failover_thread.start()
     app.state.schedule_thread.start()
+    app.state.run_event_thread.start()
 
 
 @app.on_event("shutdown")
@@ -108,9 +111,12 @@ def on_shutdown():
     th1 = getattr(app.state, "scheduler_thread", None)
     th2 = getattr(app.state, "failover_thread", None)
     th3 = getattr(app.state, "schedule_thread", None)
+    th4 = getattr(app.state, "run_event_thread", None)
     if th1:
         th1.join(timeout=2)
     if th2:
         th2.join(timeout=2)
     if th3:
         th3.join(timeout=2)
+    if th4:
+        th4.join(timeout=2)

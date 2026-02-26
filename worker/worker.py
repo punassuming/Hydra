@@ -1,9 +1,10 @@
 import os
 import threading
 import time
+import json
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 
-from .mongo_client import get_db
 from .redis_client import get_redis
 from .config import (
     get_worker_id,
@@ -17,7 +18,20 @@ from .config import (
 from .utils.heartbeat import start_heartbeat
 from .utils.concurrency import incr_running, add_active_job, remove_active_job
 from .utils.completion import evaluate_completion
-from .executor import execute_job, record_run_start, record_run_end
+from .executor import execute_job
+
+
+def append_worker_op(r, domain: str, worker_id: str, op_type: str, message: str, details: dict | None = None):
+    event = {
+        "ts": time.time(),
+        "type": op_type,
+        "message": message,
+        "details": details or {},
+    }
+    key = f"worker_ops:{domain}:{worker_id}"
+    r.rpush(key, json.dumps(event))
+    r.ltrim(key, -1000, -1)
+    r.expire(key, 7 * 24 * 3600)
 
 
 def register_worker(worker_id: str, max_concurrency: int):
@@ -34,10 +48,13 @@ def register_worker(worker_id: str, max_concurrency: int):
     subnet = ".".join(ip_addr.split(".")[:3]) if ip_addr else ""
     deployment_type = os.getenv("DEPLOYMENT_TYPE", "docker")
     domain_token = get_domain_token()
+    domain = get_domain()
+    worker_key = f"workers:{domain}:{worker_id}"
+    is_restart = bool(r.exists(worker_key))
 
     meta = {
         "os": platform.system().lower(),
-        "domain": get_domain(),
+        "domain": domain,
         "tags": ",".join(get_tags()),
         "allowed_users": ",".join(get_allowed_users()),
         "max_concurrency": max_concurrency,
@@ -54,12 +71,25 @@ def register_worker(worker_id: str, max_concurrency: int):
         "run_user": getpass.getuser(),
         "domain_token_hash": __import__("hashlib").sha256(domain_token.encode()).hexdigest(),
     }
-    r.hset(f"workers:{get_domain()}:{worker_id}", mapping=meta)
+    r.hset(worker_key, mapping=meta)
+    append_worker_op(
+        r=r,
+        domain=domain,
+        worker_id=worker_id,
+        op_type="restart" if is_restart else "start",
+        message="Worker process registered" if not is_restart else "Worker process restarted and re-registered",
+        details={
+            "max_concurrency": max_concurrency,
+            "state": meta.get("state"),
+            "hostname": hostname,
+            "run_user": meta.get("run_user"),
+            "pid": os.getpid(),
+        },
+    )
 
 
 def worker_main():
     r = get_redis()
-    db = get_db()
     worker_id = get_worker_id()
     max_concurrency = get_max_concurrency()
     domain = get_domain()
@@ -76,29 +106,67 @@ def worker_main():
 
     executor = ThreadPoolExecutor(max_workers=max_concurrency)
 
-    def run_job(job_id: str, bypass_override: bool = False):
+    def publish_run_event(event: dict):
+        r.rpush(f"run_events:{domain}", json.dumps(event))
+        r.expire(f"run_events:{domain}", 24 * 3600)
+
+    def run_job(envelope: dict, bypass_override: bool = False):
+        job = envelope.get("job") or {}
+        job_id = envelope.get("job_id") or job.get("_id") or job.get("id")
+        if not job_id:
+            return
         try:
-            job = db.job_definitions.find_one({"_id": job_id})
-            if not job:
-                return
             bypass_concurrency = bool(job.get("bypass_concurrency", False) or bypass_override)
             with active_jobs_lock:
                 active_jobs.add(job_id)
             slot_position = incr_running(worker_id, +1) - 1
             add_active_job(worker_id, job_id)
+            run_id = uuid.uuid4().hex
+            retries_remaining = int(job.get("retries", 0))
+            started_ts = time.time()
+            enqueued_ts = envelope.get("enqueued_ts")
+            try:
+                queue_latency_ms = max(0.0, (started_ts - float(enqueued_ts)) * 1000.0) if enqueued_ts is not None else None
+            except Exception:
+                queue_latency_ms = None
+
             r.hset(
                 f"job_running:{domain}:{job_id}",
-                mapping={"worker_id": worker_id, "heartbeat": time.time(), "user": job.get("user", ""), "domain": domain},
+                mapping={
+                    "worker_id": worker_id,
+                    "heartbeat": started_ts,
+                    "user": job.get("user", ""),
+                    "domain": domain,
+                    "run_id": run_id,
+                },
             )
-
-            # Create/mark run start
-            retries_remaining = int(job.get("retries", 0))
-            run_id = record_run_start(
-                job,
-                worker_id,
-                slot_position,
-                retries_remaining,
-                bypass_concurrency=bypass_concurrency,
+            publish_run_event(
+                {
+                    "type": "run_start",
+                    "run_id": run_id,
+                    "job_id": job_id,
+                    "user": job.get("user", ""),
+                    "domain": domain,
+                    "worker_id": worker_id,
+                    "start_ts": started_ts,
+                    "scheduled_ts": envelope.get("dispatch_ts") or started_ts,
+                    "slot": slot_position,
+                    "attempt": 1,
+                    "retries_remaining": retries_remaining,
+                    "schedule_tick": (job.get("schedule") or {}).get("next_run_at"),
+                    "schedule_mode": (job.get("schedule") or {}).get("mode", "immediate"),
+                    "executor_type": (job.get("executor") or {}).get("type", "shell"),
+                    "queue_latency_ms": queue_latency_ms,
+                    "bypass_concurrency": bypass_concurrency,
+                }
+            )
+            append_worker_op(
+                r=r,
+                domain=domain,
+                worker_id=worker_id,
+                op_type="run_exec",
+                message=f"Executing job {job_id}",
+                details={"run_id": run_id, "job_id": job_id, "slot": slot_position},
             )
 
             def stream_log(kind: str, chunk: str):
@@ -144,7 +212,47 @@ def worker_main():
                     break
 
             status = "success" if success else "failed"
-            record_run_end(run_id, status, rc, stdout, stderr, attempts_used, last_reason or "criteria not met")
+            publish_run_event(
+                {
+                    "type": "run_end",
+                    "run_id": run_id,
+                    "job_id": job_id,
+                    "user": job.get("user", ""),
+                    "domain": domain,
+                    "worker_id": worker_id,
+                    "status": status,
+                    "returncode": rc,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "attempt": attempts_used,
+                    "completion_reason": last_reason or "criteria not met",
+                    "end_ts": time.time(),
+                    "slot": slot_position,
+                    "retries_remaining": retries_remaining,
+                    "schedule_tick": (job.get("schedule") or {}).get("next_run_at"),
+                    "schedule_mode": (job.get("schedule") or {}).get("mode", "immediate"),
+                    "executor_type": (job.get("executor") or {}).get("type", "shell"),
+                    "queue_latency_ms": queue_latency_ms,
+                    "bypass_concurrency": bypass_concurrency,
+                    "start_ts": started_ts,
+                    "scheduled_ts": envelope.get("dispatch_ts") or started_ts,
+                }
+            )
+            append_worker_op(
+                r=r,
+                domain=domain,
+                worker_id=worker_id,
+                op_type="run_result",
+                message=f"Job {job_id} completed with status {status}",
+                details={
+                    "run_id": run_id,
+                    "job_id": job_id,
+                    "status": status,
+                    "returncode": rc,
+                    "attempt": attempts_used,
+                    "completion_reason": last_reason or "criteria not met",
+                },
+            )
         finally:
             r.delete(f"job_running:{domain}:{job_id}")
             remove_active_job(worker_id, job_id)
@@ -157,13 +265,17 @@ def worker_main():
         item = r.blpop([f"job_queue:{domain}:{worker_id}"], timeout=2)
         if not item:
             continue
-        _, job_id = item
-        job_meta = db.job_definitions.find_one({"_id": job_id}, {"bypass_concurrency": 1})
-        bypass_concurrency = bool((job_meta or {}).get("bypass_concurrency", False))
+        _, raw_payload = item
+        try:
+            envelope = json.loads(raw_payload)
+        except Exception:
+            # Legacy queue payloads carried only job_id and require Mongo lookups; skip in Redis-only worker mode.
+            continue
+        bypass_concurrency = bool(((envelope.get("job") or {}).get("bypass_concurrency", False)))
         if bypass_concurrency:
-            threading.Thread(target=run_job, args=(job_id, True), daemon=True).start()
+            threading.Thread(target=run_job, args=(envelope, True), daemon=True).start()
         else:
-            executor.submit(run_job, job_id, False)
+            executor.submit(run_job, envelope, False)
 
 
 if __name__ == "__main__":

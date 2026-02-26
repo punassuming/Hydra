@@ -64,9 +64,9 @@ export const lightThemeColors: ThemeColors = {
   // Special purpose colors
   headerBg: "#0f172a",
   cardHover: "#f0f5ff",
-  logBg: "#1e1e1e",
-  logText: "#d4d4d4",
-  logErrorBg: "#2e1e1e",
+  logBg: "#111827",
+  logText: "#f3f4f6",
+  logErrorBg: "#3b1212",
 };
 
 export const darkThemeColors: ThemeColors = {
@@ -97,7 +97,7 @@ export const darkThemeColors: ThemeColors = {
   // Special purpose colors
   headerBg: "#050b18",
   cardHover: "#1e293b",
-  logBg: "#0a0f1e",
-  logText: "#e2e8f0",
-  logErrorBg: "#1e0a0a",
+  logBg: "#020617",
+  logText: "#f8fafc",
+  logErrorBg: "#2f1010",
 };

@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import List, Dict, Any
+import time
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -25,7 +26,7 @@ def _fetch_job_runs(job_id: str, domain_filter: str | None = None) -> List[Dict[
     query: Dict[str, Any] = {"job_id": job_id}
     if domain_filter:
         query["domain"] = domain_filter
-    runs = list(db.job_runs.find(query).sort("_id", 1))
+    runs = list(db.job_runs.find(query).sort("start_ts", 1))
     normalized: List[Dict[str, Any]] = []
     for run in runs:
         doc = _normalize_run_doc(run)
@@ -56,6 +57,11 @@ def _enqueue_job(job_id: str, reason: str, extra_payload: dict | None = None, pr
     score = float(priority if priority is not None else 5)
     r.sadd("hydra:domains", domain)
     r.zadd(f"job_queue:{domain}:pending", {job_id: score})
+    r.hset(
+        f"job_enqueue_meta:{domain}:{job_id}",
+        mapping={"enqueued_ts": time.time(), "reason": reason},
+    )
+    r.expire(f"job_enqueue_meta:{domain}:{job_id}", 24 * 3600)
     payload = {"job_id": job_id, "reason": reason, "priority": score, "domain": domain}
     if extra_payload:
         payload.update(extra_payload)
@@ -155,14 +161,16 @@ def list_jobs(request: Request):
 def submit_job(job: JobCreate, request: Request):
     db = get_db()
     domain = getattr(request.state, "domain", "prod")
-    job_def = JobDefinition(**job.model_dump(), domain=domain)
+    payload = job.model_dump()
+    payload["domain"] = domain
+    job_def = JobDefinition(**payload)
     validation = _validate_job_definition(job_def)
     if not validation.valid:
         raise HTTPException(status_code=422, detail=validation.errors)
     job_def = _attach_schedule(job_def, force=True)
     db.job_definitions.insert_one(job_def.to_mongo())
     if job_def.schedule.mode == "immediate":
-        _enqueue_job(job_def.id, reason="immediate_submit", priority=job_def.priority)
+        _enqueue_job(job_def.id, reason="immediate_submit", priority=job_def.priority, domain=job_def.domain)
     event_bus.publish(
         "job_submitted",
         {
@@ -205,7 +213,7 @@ def get_job_runs(job_id: str, request: Request):
     is_admin = getattr(request.state, "is_admin", False)
     if not is_admin and job.get("domain", "prod") != domain:
         raise HTTPException(status_code=403, detail="forbidden")
-    domain_filter = None if (is_admin and not force_domain) else domain
+    domain_filter = None if (is_admin and not force_domain) else (force_domain or domain)
     runs = _fetch_job_runs(job_id, domain_filter=domain_filter)
     return [JobRun.model_validate(r) for r in runs]
 
@@ -252,7 +260,9 @@ def validate_job(job_id: str, request: Request):
 @router.post("/jobs/validate", response_model=JobValidationResult)
 def validate_payload(job: JobCreate, request: Request):
     domain = getattr(request.state, "domain", "prod")
-    job_def = JobDefinition(**job.model_dump(), domain=domain)
+    payload = job.model_dump()
+    payload["domain"] = domain
+    job_def = JobDefinition(**payload)
     return _validate_job_definition(job_def)
 
 
@@ -279,7 +289,8 @@ def run_adhoc_job(job: JobCreate, request: Request):
     adhoc_schedule = ScheduleConfig(mode="immediate", enabled=False)
     job_dict = job.model_dump()
     job_dict["schedule"] = adhoc_schedule.model_dump()
-    job_def = JobDefinition(**job_dict, domain=domain)
+    job_dict["domain"] = domain
+    job_def = JobDefinition(**job_dict)
     validation = _validate_job_definition(job_def)
     if not validation.valid:
         raise HTTPException(status_code=422, detail=validation.errors)
@@ -378,7 +389,7 @@ def job_grid(job_id: str, request: Request):
     if not is_admin and job.get("domain", "prod") != domain:
         raise HTTPException(status_code=403, detail="forbidden")
     force_domain = request.query_params.get("domain")
-    runs = _fetch_job_runs(job_id, domain_filter=None if (is_admin and not force_domain) else domain)
+    runs = _fetch_job_runs(job_id, domain_filter=None if (is_admin and not force_domain) else (force_domain or domain))
     task_id = "task_main"
     tasks = [
         {
@@ -420,7 +431,7 @@ def job_gantt(job_id: str, request: Request):
     if not is_admin and job.get("domain", "prod") != domain:
         raise HTTPException(status_code=403, detail="forbidden")
     force_domain = request.query_params.get("domain")
-    runs = _fetch_job_runs(job_id, domain_filter=None if (is_admin and not force_domain) else domain)
+    runs = _fetch_job_runs(job_id, domain_filter=None if (is_admin and not force_domain) else (force_domain or domain))
     entries = [
         {
             "run_id": run["_id"],
@@ -445,7 +456,7 @@ def job_graph(job_id: str, request: Request):
     if not is_admin and job.get("domain", "prod") != domain:
         raise HTTPException(status_code=403, detail="forbidden")
     force_domain = request.query_params.get("domain")
-    runs = _fetch_job_runs(job_id, domain_filter=None if (is_admin and not force_domain) else domain)
+    runs = _fetch_job_runs(job_id, domain_filter=None if (is_admin and not force_domain) else (force_domain or domain))
     last_status = runs[-1]["status"] if runs else "unknown"
     nodes = [
         {

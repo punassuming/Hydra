@@ -16,6 +16,8 @@ export type Executor =
       args?: string[];
       env?: Record<string, string>;
       workdir?: string | null;
+      impersonate_user?: string | null;
+      kerberos?: KerberosConfig | null;
     }
   | {
       type: "shell";
@@ -24,6 +26,8 @@ export type Executor =
       args?: string[];
       env?: Record<string, string>;
       workdir?: string | null;
+      impersonate_user?: string | null;
+      kerberos?: KerberosConfig | null;
     }
   | {
       type: "batch";
@@ -32,6 +36,8 @@ export type Executor =
       args?: string[];
       env?: Record<string, string>;
       workdir?: string | null;
+      impersonate_user?: string | null;
+      kerberos?: KerberosConfig | null;
     }
   | {
       type: "external";
@@ -39,7 +45,15 @@ export type Executor =
       args?: string[];
       env?: Record<string, string>;
       workdir?: string | null;
+      impersonate_user?: string | null;
+      kerberos?: KerberosConfig | null;
     };
+
+export interface KerberosConfig {
+  principal: string;
+  keytab: string;
+  ccache?: string | null;
+}
 
 export interface PythonEnvironment {
   type: "system" | "venv" | "uv";
@@ -73,6 +87,7 @@ export interface JobDefinition {
   name: string;
   user: string;
   domain?: string;
+  bypass_concurrency?: boolean;
   priority: number;
   affinity: Affinity;
   executor: Executor;
@@ -108,6 +123,7 @@ export interface JobRun {
   stdout_tail?: string;
   stderr_tail?: string;
   duration?: number | null;
+  bypass_concurrency?: boolean;
 }
 
 export interface JobOverview {
@@ -199,10 +215,66 @@ export interface WorkerInfo {
   cwd?: string;
   process_count?: number;
   memory_rss_mb?: number;
+  load_1m?: number;
+  load_5m?: number;
   process_count_max_30m?: number;
   memory_rss_mb_max_30m?: number;
+  load_1m_max_30m?: number;
   metrics_updated_at?: number;
   running_jobs?: string[];
+  running_users?: string[];
+  connectivity_status?: "online" | "offline";
+  dispatch_status?: "online" | "draining" | "offline";
+  heartbeat_age_seconds?: number;
+}
+
+export interface WorkerMetricPoint {
+  ts: number;
+  memory_rss_mb?: number | null;
+  process_count?: number | null;
+  load_1m?: number | null;
+  load_5m?: number | null;
+}
+
+export interface WorkerMetricsData {
+  worker_id: string;
+  domain: string;
+  window_minutes: number;
+  points: WorkerMetricPoint[];
+}
+
+export interface WorkerTimelineEntry {
+  run_id: string;
+  job_id: string;
+  job_name?: string;
+  status: string;
+  start_ts: number;
+  end_ts: number;
+  slot: number;
+  bypass_concurrency?: boolean;
+}
+
+export interface WorkerTimelineData {
+  worker_id: string;
+  domain: string;
+  window_minutes: number;
+  window_start_ts: number;
+  window_end_ts: number;
+  max_concurrency: number;
+  entries: WorkerTimelineEntry[];
+}
+
+export interface WorkerOperation {
+  ts: number;
+  type: string;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+export interface WorkerOperationsData {
+  worker_id: string;
+  domain: string;
+  events: WorkerOperation[];
 }
 
 export interface SchedulerEvent {

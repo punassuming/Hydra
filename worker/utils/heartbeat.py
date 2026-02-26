@@ -33,7 +33,28 @@ def _collect_process_metrics() -> dict:
         except (FileNotFoundError, PermissionError, ProcessLookupError, OSError, ValueError):
             # Process exited between listing /proc and opening status; skip safely.
             continue
-    return {"process_count": process_count, "memory_rss_mb": round(total_rss_kb / 1024.0, 2)}
+    load_1m = None
+    load_5m = None
+    try:
+        load_avg = os.getloadavg()
+        load_1m = round(float(load_avg[0]), 2)
+        load_5m = round(float(load_avg[1]), 2)
+    except (AttributeError, OSError):
+        try:
+            with open("/proc/loadavg", "r", encoding="utf-8") as f:
+                parts = f.read().strip().split()
+                if len(parts) >= 2:
+                    load_1m = round(float(parts[0]), 2)
+                    load_5m = round(float(parts[1]), 2)
+        except Exception:
+            load_1m = None
+            load_5m = None
+    return {
+        "process_count": process_count,
+        "memory_rss_mb": round(total_rss_kb / 1024.0, 2),
+        "load_1m": load_1m,
+        "load_5m": load_5m,
+    }
 
 
 def start_heartbeat(worker_id: str, get_active_jobs: Callable[[], list], interval: float = 2.0) -> threading.Thread:
@@ -68,6 +89,8 @@ def start_heartbeat(worker_id: str, get_active_jobs: Callable[[], list], interva
                         mapping={
                             "process_count": metrics["process_count"],
                             "memory_rss_mb": metrics["memory_rss_mb"],
+                            "load_1m": metrics["load_1m"] if metrics.get("load_1m") is not None else "",
+                            "load_5m": metrics["load_5m"] if metrics.get("load_5m") is not None else "",
                             "metrics_ts": now,
                         },
                     )

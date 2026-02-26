@@ -14,6 +14,13 @@ class AIProvider(str, Enum):
     GEMINI = "gemini"
     OPENAI = "openai"
 
+class AnalysisType(str, Enum):
+    FAILURE = "failure"
+    SUMMARY = "summary"
+    ERRORS = "errors"
+    RETRY = "retry"
+    CUSTOM = "custom"
+
 class GenerateRequest(BaseModel):
     prompt: str
     provider: AIProvider = AIProvider.GEMINI
@@ -24,6 +31,8 @@ class AnalyzeRequest(BaseModel):
     stdout: str
     stderr: str
     exit_code: int
+    analysis_type: AnalysisType = AnalysisType.FAILURE
+    question: Optional[str] = None
     provider: AIProvider = AIProvider.GEMINI
     model: Optional[str] = None
 
@@ -117,15 +126,67 @@ async def generate_job(req: GenerateRequest):
 async def analyze_run(req: AnalyzeRequest):
     provider = req.provider
     model = req.model or ("gemini-pro" if provider == AIProvider.GEMINI else "gpt-4o")
-    
-    prompt = f"""
-    Analyze the following job failure and provide actionable remediation steps.
-    Exit Code: {req.exit_code}
-    Stderr: {req.stderr[-4000:]}
-    Stdout: {req.stdout[-1000:]}
-    
-    Provide a concise summary of the error and 1-3 specific steps to fix it.
-    """
+
+    stderr_tail = (req.stderr or "")[-6000:]
+    stdout_tail = (req.stdout or "")[-2500:]
+    context = f"""
+Run ID: {req.run_id}
+Exit Code: {req.exit_code}
+Stderr:
+{stderr_tail}
+
+Stdout:
+{stdout_tail}
+"""
+
+    if req.analysis_type == AnalysisType.SUMMARY:
+        prompt = f"""
+You are analyzing scheduler job logs.
+Summarize what happened in this run in 5-8 bullets:
+- major phases
+- key outputs
+- probable outcome and confidence
+- any suspicious signals
+{context}
+"""
+    elif req.analysis_type == AnalysisType.ERRORS:
+        prompt = f"""
+You are analyzing scheduler job logs.
+Extract and normalize concrete error signals:
+- error signatures (deduplicated)
+- likely root cause category
+- the first relevant failing line
+- suggested regex patterns to detect this issue next time
+Respond with concise sections and include exact snippets only when needed.
+{context}
+"""
+    elif req.analysis_type == AnalysisType.RETRY:
+        prompt = f"""
+You are analyzing scheduler job logs.
+Recommend retry and timeout tuning for this job:
+- should retries increase/decrease and why
+- suggested timeout value strategy
+- whether failure appears transient vs deterministic
+- guardrails to avoid retry storms
+{context}
+"""
+    elif req.analysis_type == AnalysisType.CUSTOM:
+        question = (req.question or "").strip() or "Analyze this run and provide practical debugging guidance."
+        prompt = f"""
+You are analyzing scheduler job logs.
+Answer the user question using only evidence from these logs.
+Question: {question}
+{context}
+"""
+    else:
+        prompt = f"""
+Analyze the following job failure and provide actionable remediation steps.
+Exit Code: {req.exit_code}
+Stderr: {stderr_tail}
+Stdout: {stdout_tail}
+
+Provide a concise summary of the error and 1-3 specific steps to fix it.
+"""
     
     if provider == AIProvider.GEMINI:
         text = _call_gemini(prompt, "", model)

@@ -59,6 +59,7 @@ const createDefaultPayload = (): JobPayload => ({
   executor: { type: "shell", script: "echo 'hello world'", shell: "bash" },
   retries: 0,
   timeout: 30,
+  bypass_concurrency: false,
   schedule: {
     mode: "immediate",
     enabled: true,
@@ -178,6 +179,7 @@ export function JobForm({
         executor: normalizeExecutor(selectedJob.executor),
         retries: selectedJob.retries,
         timeout: selectedJob.timeout,
+        bypass_concurrency: selectedJob.bypass_concurrency ?? false,
         // queue removed
         priority: (selectedJob as any).priority ?? 5,
         schedule: { ...createDefaultPayload().schedule, ...(selectedJob.schedule ?? {}) },
@@ -484,6 +486,60 @@ export function JobForm({
                 autoSize
               />
             </Form.Item>
+            <Divider style={{ marginTop: 0 }} />
+            <Row gutter={16}>
+              <Col xs={24} md={8}>
+                <Form.Item label="Linux Impersonation User">
+                  <Input
+                    value={(executor as any).impersonate_user ?? ""}
+                    onChange={(e) => updateExecutor({ impersonate_user: e.target.value || null })}
+                    placeholder="svc_batch (optional)"
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item label="Kerberos Principal">
+                  <Input
+                    value={(executor as any).kerberos?.principal ?? ""}
+                    onChange={(e) =>
+                      updateExecutor({
+                        kerberos: { ...((executor as any).kerberos ?? {}), principal: e.target.value },
+                      })
+                    }
+                    placeholder="user@REALM"
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item label="Kerberos Keytab Path">
+                  <Input
+                    value={(executor as any).kerberos?.keytab ?? ""}
+                    onChange={(e) =>
+                      updateExecutor({
+                        kerberos: { ...((executor as any).kerberos ?? {}), keytab: e.target.value },
+                      })
+                    }
+                    placeholder="/etc/security/keytabs/user.keytab"
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item label="Kerberos Cache (optional)">
+                  <Input
+                    value={(executor as any).kerberos?.ccache ?? ""}
+                    onChange={(e) =>
+                      updateExecutor({
+                        kerberos: { ...((executor as any).kerberos ?? {}), ccache: e.target.value || null },
+                      })
+                    }
+                    placeholder="/tmp/krb5cc_hydra"
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Typography.Text type="secondary">
+              Linux workers only. If `impersonate_user` is set, worker runs command as `sudo -n -u &lt;user&gt;` and runs `kinit -kt` before job execution when Kerberos fields are provided.
+            </Typography.Text>
           </>
         );
       case "schedule":
@@ -765,6 +821,17 @@ export function JobForm({
                     onChange={(value) => updatePayload("priority", Number(value))}
                   />
                 </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item label="Bypass Worker Concurrency Quota">
+                  <Switch
+                    checked={Boolean(payload.bypass_concurrency)}
+                    onChange={(checked) => updatePayload("bypass_concurrency", checked)}
+                  />
+                </Form.Item>
+                <Typography.Text type="secondary">
+                  When enabled, this job can run beyond worker max concurrency lanes.
+                </Typography.Text>
               </Col>
             </Row>
           </>

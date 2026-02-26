@@ -3,10 +3,18 @@ from typing import Annotated, Dict, List, Optional, Union, Literal
 from pydantic import BaseModel, Field
 
 
+class KerberosConfig(BaseModel):
+    principal: str
+    keytab: str
+    ccache: Optional[str] = None
+
+
 class ExecutorBase(BaseModel):
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
     workdir: Optional[str] = None
+    impersonate_user: Optional[str] = None
+    kerberos: Optional[KerberosConfig] = None
 
 
 class PythonEnvironment(BaseModel):

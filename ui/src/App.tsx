@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Layout, Typography, Space, Segmented } from "antd";
+import { Layout, Typography, Space, Segmented, Button } from "antd";
 import { Routes, Route, useLocation, useNavigate } from "react-router-dom";
 import { ConfigProvider, theme } from "antd";
+import { MoonOutlined, SunOutlined, SettingOutlined } from "@ant-design/icons";
 import { HomePage } from "./pages/Home";
 import { BrowsePage } from "./pages/Browse";
 import { JobDetailPage } from "./pages/JobDetail";
@@ -41,6 +42,7 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
       { value: "workers", label: "Workers", path: "/workers" },
       { value: "status", label: "Status", path: "/status" },
       { value: "history", label: "History", path: "/history" },
+      { value: "admin", label: "Admin", path: "/admin" },
     ],
     [],
   );
@@ -49,7 +51,7 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
     if (location.pathname.startsWith("/workers")) return "workers";
     if (location.pathname.startsWith("/status")) return "status";
     if (location.pathname.startsWith("/history")) return "history";
-    if (location.pathname.startsWith("/admin")) return undefined;
+    if (location.pathname.startsWith("/admin")) return "admin";
     return "jobs";
   }, [location.pathname]);
 
@@ -148,7 +150,16 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
                 <Typography.Text style={{ color: darkMode ? "#cbd5e1" : "#1e293b", fontSize: 13 }}>
                   Domain: <strong>{activeDomain}</strong>
                 </Typography.Text>
-                <HeaderSettings darkMode={darkMode} setDarkMode={setDarkMode} />
+                <Button
+                  icon={darkMode ? <SunOutlined /> : <MoonOutlined />}
+                  onClick={() => setDarkMode(!darkMode)}
+                >
+                  {darkMode ? "Light" : "Dark"}
+                </Button>
+                <Button icon={<SettingOutlined />} type={location.pathname.startsWith("/admin") ? "primary" : "default"} onClick={() => navigate("/admin")}>
+                  Admin
+                </Button>
+                <HeaderSettings />
               </Space>
             </Space>
           </div>
@@ -183,7 +194,17 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
 }
 
 export default function App() {
-  const [darkMode, setDarkMode] = useState(false);
+  const [darkMode, setDarkMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("hydra_theme") === "dark";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem("hydra_theme", darkMode ? "dark" : "light");
+  }, [darkMode]);
   
   return (
     <ActiveDomainProvider>

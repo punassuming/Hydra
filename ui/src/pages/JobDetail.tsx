@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, Space, Typography, Tabs, Button, Tag, Descriptions, message } from "antd";
@@ -14,6 +14,7 @@ export function JobDetailPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [messageApi, contextHolder] = message.useMessage();
+  const [activeTab, setActiveTab] = useState(() => localStorage.getItem("hydra_job_detail_tab") || "overview");
   const { domain } = useActiveDomain();
 
   const jobQuery = useQuery({
@@ -42,6 +43,10 @@ export function JobDetailPage() {
 
   const job = jobQuery.data;
 
+  useEffect(() => {
+    localStorage.setItem("hydra_job_detail_tab", activeTab);
+  }, [activeTab]);
+
   const tabItems = useMemo(() => {
     if (!job) return [];
     return [
@@ -54,6 +59,9 @@ export function JobDetailPage() {
             <Descriptions.Item label="Name">{job.name}</Descriptions.Item>
             <Descriptions.Item label="User">{job.user}</Descriptions.Item>
             <Descriptions.Item label="Executor">{job.executor.type}</Descriptions.Item>
+            <Descriptions.Item label="Bypass Concurrency">
+              {job.bypass_concurrency ? "enabled" : "disabled"}
+            </Descriptions.Item>
             <Descriptions.Item label="Schedule Mode">{job.schedule.mode}</Descriptions.Item>
             <Descriptions.Item label="Retries">{job.retries}</Descriptions.Item>
             <Descriptions.Item label="Timeout">{job.timeout}s</Descriptions.Item>
@@ -122,7 +130,7 @@ export function JobDetailPage() {
           </Space>
         </Space>
       </Card>
-      <Tabs items={tabItems} />
+      <Tabs items={tabItems} activeKey={activeTab} onChange={setActiveTab} />
     </Space>
   );
 }

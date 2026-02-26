@@ -75,14 +75,12 @@ export function HistoryPage() {
               stderr={logModal.run.stderr_tail ?? logModal.run.stderr}
               maxHeight={400}
             />
-            {logModal.run.status === "failed" && (
-              <FailureInsight
-                runId={logModal.run._id}
-                stdout={logModal.run.stdout || ""}
-                stderr={logModal.run.stderr || ""}
-                exitCode={logModal.run.returncode || 1}
-              />
-            )}
+            <FailureInsight
+              runId={logModal.run._id}
+              stdout={logModal.run.stdout || ""}
+              stderr={logModal.run.stderr || ""}
+              exitCode={logModal.run.returncode || 1}
+            />
           </Space>
         ) : (
           <Typography.Text type="secondary">No logs available.</Typography.Text>

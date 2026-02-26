@@ -26,6 +26,8 @@ def worker_acl_key_patterns(domain: str) -> list[str]:
         f"~job_running:{domain}:*",
         f"~worker_metrics:{domain}:*",
         f"~log_stream:{domain}:*",
+        f"~run_events:{domain}",
+        f"~worker_ops:{domain}:*",
     ]
 
 
@@ -36,6 +38,7 @@ def worker_acl_channel_patterns(domain: str) -> list[str]:
 def worker_acl_commands() -> list[str]:
     return [
         "+ping",
+        "+exists",
         "+blpop",
         "+hset",
         "+hincrby",

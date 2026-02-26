@@ -5,6 +5,8 @@ import { Card, Table, Tag, Modal, Typography, Space, Tooltip } from "antd";
 import { JobOverview as JobOverviewType } from "../types";
 import { Link } from "react-router-dom";
 import { useActiveDomain } from "../context/ActiveDomainContext";
+import { LogViewer } from "./LogViewer";
+import { FailureInsight } from "./FailureInsight";
 
 export function JobOverview() {
   const { domain } = useActiveDomain();
@@ -122,18 +124,17 @@ export function JobOverview() {
         {logModal.run ? (
           <Space direction="vertical" style={{ width: "100%" }}>
             <Typography.Text strong>Status: {logModal.run.status}</Typography.Text>
-            <Typography.Paragraph>
-              <Typography.Text strong>Stdout:</Typography.Text>
-              <pre style={{ background: "#f5f5f5", padding: 12 }}>
-                {logModal.run.stdout_tail ?? logModal.run.stdout ?? "(no stdout)"}{" "}
-              </pre>
-            </Typography.Paragraph>
-            <Typography.Paragraph>
-              <Typography.Text strong>Stderr:</Typography.Text>
-              <pre style={{ background: "#f5f5f5", padding: 12 }}>
-                {logModal.run.stderr_tail ?? logModal.run.stderr ?? "(no stderr)"}
-              </pre>
-            </Typography.Paragraph>
+            <LogViewer
+              stdout={logModal.run.stdout_tail ?? logModal.run.stdout ?? ""}
+              stderr={logModal.run.stderr_tail ?? logModal.run.stderr ?? ""}
+              maxHeight={360}
+            />
+            <FailureInsight
+              runId={logModal.run._id}
+              stdout={logModal.run.stdout ?? ""}
+              stderr={logModal.run.stderr ?? ""}
+              exitCode={logModal.run.returncode || 1}
+            />
           </Space>
         ) : (
           <Typography.Text type="secondary">No logs available.</Typography.Text>

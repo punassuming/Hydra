@@ -91,10 +91,13 @@ key_patterns=(
   "~job_running:${DOMAIN}:*"
   "~worker_metrics:${DOMAIN}:*"
   "~log_stream:${DOMAIN}:*"
+  "~run_events:${DOMAIN}"
+  "~worker_ops:${DOMAIN}:*"
 )
 channel_patterns=("&log_stream:${DOMAIN}:*")
 commands=(
   "+ping"
+  "+exists"
   "+blpop"
   "+hset"
   "+hincrby"
@@ -117,6 +120,7 @@ echo "REDIS_PASSWORD=${WORKER_PASSWORD}"
 echo ""
 echo "Worker env example:"
 echo "WORKER_DOMAIN=${DOMAIN}"
+echo "WORKER_REQUIRE_REDIS_ACL=true"
 echo "REDIS_URL=${REDIS_URL:-redis://${REDIS_HOST}:${REDIS_PORT}/${REDIS_DB}}"
 echo "REDIS_USERNAME=${WORKER_USERNAME}"
 echo "REDIS_PASSWORD=${WORKER_PASSWORD}"

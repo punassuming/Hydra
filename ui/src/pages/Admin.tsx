@@ -215,7 +215,6 @@ export function AdminPage() {
 {`WORKER_DOMAIN=${activeDomain} API_TOKEN=<domain_token> \\
 REDIS_URL=redis://localhost:6379/0 \\
 REDIS_USERNAME=<worker_redis_acl_username> REDIS_PASSWORD=<worker_redis_acl_password> \\
-MONGO_URL=mongodb://localhost:27017 \\
 docker compose -f docker-compose.worker.yml up --build`}
             </pre>
           </Typography.Paragraph>

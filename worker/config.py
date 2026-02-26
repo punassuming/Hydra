@@ -4,7 +4,10 @@ from typing import List
 
 
 def get_worker_id() -> str:
-    return os.getenv("WORKER_ID", f"worker-{platform.node()}-{os.getpid()}")
+    configured = (os.getenv("WORKER_ID") or "").strip()
+    if configured:
+        return configured
+    return f"worker-{platform.node()}-{os.getpid()}"
 
 
 def get_tags() -> List[str]:

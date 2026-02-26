@@ -1,18 +1,213 @@
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Card, Col, Descriptions, Row, Space, Statistic, Tag, Typography, Button, List } from "antd";
+import { Card, Col, Descriptions, Row, Space, Statistic, Tag, Typography, Button, List, Select, Tooltip } from "antd";
 import { useNavigate, useParams } from "react-router-dom";
-import { fetchWorkers } from "../api/jobs";
+import { fetchWorkerMetrics, fetchWorkerOperations, fetchWorkers, fetchWorkerTimeline } from "../api/jobs";
 import { apiClient } from "../api/client";
-import { WorkerInfo } from "../types";
+import { WorkerMetricPoint, WorkerOperation, WorkerTimelineData, WorkerTimelineEntry } from "../types";
 import { useActiveDomain } from "../context/ActiveDomainContext";
+
+function statusColor(status: string) {
+  if (status === "success") return "#22c55e";
+  if (status === "failed") return "#ef4444";
+  if (status === "running") return "#3b82f6";
+  return "#64748b";
+}
+
+function opColor(opType: string) {
+  if (opType.includes("fail")) return "error";
+  if (opType.includes("start")) return "processing";
+  if (opType.includes("state")) return "warning";
+  if (opType.includes("dispatch")) return "blue";
+  if (opType.includes("end") || opType.includes("result")) return "success";
+  return "default";
+}
+
+function MetricLineChart({
+  title,
+  points,
+  selector,
+  unit,
+  color,
+}: {
+  title: string;
+  points: WorkerMetricPoint[];
+  selector: (p: WorkerMetricPoint) => number | null | undefined;
+  unit: string;
+  color: string;
+}) {
+  const valid = points
+    .map((p) => ({ ts: p.ts, v: selector(p) }))
+    .filter((p): p is { ts: number; v: number } => p.v != null && Number.isFinite(p.v));
+  if (!valid.length) {
+    return (
+      <Card size="small" title={title}>
+        <Typography.Text type="secondary">No metrics yet.</Typography.Text>
+      </Card>
+    );
+  }
+
+  const minTs = valid[0].ts;
+  const maxTs = valid[valid.length - 1].ts;
+  const minV = Math.min(...valid.map((p) => p.v));
+  const maxV = Math.max(...valid.map((p) => p.v));
+  const spanTs = Math.max(maxTs - minTs, 1);
+  const spanV = Math.max(maxV - minV, 1);
+
+  const path = valid
+    .map((p, idx) => {
+      const x = 14 + ((p.ts - minTs) / spanTs) * 452;
+      const y = 108 - ((p.v - minV) / spanV) * 84;
+      return `${idx === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
+    })
+    .join(" ");
+  const latest = valid[valid.length - 1].v;
+
+  return (
+    <Card
+      size="small"
+      title={title}
+      extra={
+        <Typography.Text type="secondary">
+          {latest.toFixed(2)} {unit} now
+        </Typography.Text>
+      }
+    >
+      <svg viewBox="0 0 480 120" style={{ width: "100%", height: 120 }}>
+        <rect x="14" y="12" width="452" height="96" fill="rgba(148,163,184,0.08)" rx="8" />
+        <path d={path} stroke={color} strokeWidth="2.5" fill="none" />
+      </svg>
+      <Typography.Text type="secondary">
+        {new Date(minTs * 1000).toLocaleTimeString()} - {new Date(maxTs * 1000).toLocaleTimeString()}
+      </Typography.Text>
+    </Card>
+  );
+}
+
+function WorkerTimeline({ data }: { data?: WorkerTimelineData }) {
+  if (!data?.entries?.length) {
+    return <Typography.Text type="secondary">No worker executions in the selected window.</Typography.Text>;
+  }
+  const entries = data.entries;
+  const maxSlot = Math.max(...entries.map((e) => Math.max(0, e.slot)), data.max_concurrency - 1);
+  const laneCount = Math.max(data.max_concurrency, maxSlot + 1);
+  const lanes: WorkerTimelineEntry[][] = Array.from({ length: laneCount }, () => []);
+  entries.forEach((entry) => {
+    lanes[Math.max(0, entry.slot)].push(entry);
+  });
+  const windowStart = data.window_start_ts;
+  const windowEnd = data.window_end_ts;
+  const span = Math.max(windowEnd - windowStart, 1);
+
+  return (
+    <Space direction="vertical" style={{ width: "100%" }} size={8}>
+      <Typography.Text type="secondary">
+        Lane rows 1-{data.max_concurrency} are worker quota lanes; overflow rows indicate concurrency-bypass jobs.
+      </Typography.Text>
+      {lanes.map((laneEntries, laneIdx) => {
+        const isOverflow = laneIdx >= data.max_concurrency;
+        return (
+          <div key={laneIdx} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <div style={{ width: 140, fontSize: 12, color: isOverflow ? "#dc2626" : "#475569" }}>
+              {isOverflow ? `Overflow ${laneIdx - data.max_concurrency + 1}` : `Slot ${laneIdx + 1}`}
+            </div>
+            <div
+              style={{
+                position: "relative",
+                flex: 1,
+                height: 28,
+                borderRadius: 6,
+                border: "1px solid rgba(148, 163, 184, 0.35)",
+                background: isOverflow ? "rgba(239, 68, 68, 0.06)" : "rgba(148, 163, 184, 0.08)",
+              }}
+            >
+              {laneEntries.map((entry) => {
+                const start = Math.max(entry.start_ts, windowStart);
+                const end = Math.min(entry.end_ts, windowEnd);
+                const left = ((start - windowStart) / span) * 100;
+                const width = Math.max(((end - start) / span) * 100, 0.6);
+                return (
+                  <Tooltip
+                    key={entry.run_id}
+                    title={`${entry.job_name || entry.job_id} | ${entry.status} | ${new Date(entry.start_ts * 1000).toLocaleTimeString()} - ${new Date(entry.end_ts * 1000).toLocaleTimeString()}`}
+                  >
+                    <div
+                      style={{
+                        position: "absolute",
+                        left: `${left}%`,
+                        width: `${width}%`,
+                        minWidth: 10,
+                        top: 4,
+                        bottom: 4,
+                        borderRadius: 5,
+                        background: statusColor(entry.status),
+                        opacity: entry.bypass_concurrency ? 0.75 : 0.95,
+                        outline: entry.bypass_concurrency ? "2px dashed rgba(15, 23, 42, 0.25)" : "none",
+                        overflow: "hidden",
+                        whiteSpace: "nowrap",
+                        textOverflow: "ellipsis",
+                        color: "#f8fafc",
+                        fontSize: 11,
+                        padding: "2px 6px",
+                      }}
+                    >
+                      {entry.job_name || entry.job_id}
+                    </div>
+                  </Tooltip>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+      <Typography.Text type="secondary">
+        {new Date(windowStart * 1000).toLocaleString()} - {new Date(windowEnd * 1000).toLocaleString()}
+      </Typography.Text>
+    </Space>
+  );
+}
 
 export function WorkerDetailPage() {
   const { domain } = useActiveDomain();
   const { workerId } = useParams<{ workerId: string }>();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const [metricsWindow, setMetricsWindow] = useState<number>(() => {
+    const v = Number(localStorage.getItem("hydra_worker_metrics_window"));
+    return Number.isFinite(v) && v > 0 ? v : 30;
+  });
+  const [timelineWindow, setTimelineWindow] = useState<number>(() => {
+    const v = Number(localStorage.getItem("hydra_worker_timeline_window"));
+    return Number.isFinite(v) && v > 0 ? v : 180;
+  });
   const { data, isLoading } = useQuery({ queryKey: ["workers", domain], queryFn: fetchWorkers, refetchInterval: 5000 });
   const worker = data?.find((w) => w.worker_id === workerId);
+  const metricsQuery = useQuery({
+    queryKey: ["worker-metrics", domain, workerId, metricsWindow],
+    queryFn: () => fetchWorkerMetrics(workerId!, metricsWindow),
+    enabled: Boolean(workerId),
+    refetchInterval: 10000,
+  });
+  const timelineQuery = useQuery({
+    queryKey: ["worker-timeline", domain, workerId, timelineWindow],
+    queryFn: () => fetchWorkerTimeline(workerId!, timelineWindow),
+    enabled: Boolean(workerId),
+    refetchInterval: 10000,
+  });
+  const operationsQuery = useQuery({
+    queryKey: ["worker-operations", domain, workerId],
+    queryFn: () => fetchWorkerOperations(workerId!, 300),
+    enabled: Boolean(workerId),
+    refetchInterval: 5000,
+  });
+  const metricPoints = useMemo(() => metricsQuery.data?.points ?? [], [metricsQuery.data?.points]);
+
+  useEffect(() => {
+    localStorage.setItem("hydra_worker_metrics_window", String(metricsWindow));
+  }, [metricsWindow]);
+  useEffect(() => {
+    localStorage.setItem("hydra_worker_timeline_window", String(timelineWindow));
+  }, [timelineWindow]);
 
   const setStateMutation = useMutation({
     mutationFn: (state: string) => apiClient.post(`/workers/${workerId}/state`, { state }),
@@ -42,8 +237,12 @@ export function WorkerDetailPage() {
         <Typography.Title level={3} style={{ marginBottom: 0 }}>
           {worker.worker_id}
         </Typography.Title>
-        <Tag color={worker.status === "online" ? "green" : "volcano"}>{worker.status}</Tag>
-        <Tag>{worker.state ?? "online"}</Tag>
+        <Tag color={(worker.connectivity_status ?? worker.status) === "online" ? "green" : "volcano"}>
+          connectivity: {worker.connectivity_status ?? worker.status}
+        </Tag>
+        <Tag color={(worker.dispatch_status ?? worker.state) === "online" ? "green" : (worker.dispatch_status ?? worker.state) === "draining" ? "gold" : "default"}>
+          dispatch: {worker.dispatch_status ?? worker.state ?? "offline"}
+        </Tag>
         <Button onClick={() => navigate("/workers")}>Back</Button>
       </Space>
 
@@ -81,6 +280,67 @@ export function WorkerDetailPage() {
         <Col xs={24} md={8}>
           <Card>
             <Statistic
+              title="Load (1m / 5m)"
+              value={
+                worker.load_1m != null || worker.load_5m != null
+                  ? `${worker.load_1m?.toFixed(2) ?? "-"} / ${worker.load_5m?.toFixed(2) ?? "-"}`
+                  : "-"
+              }
+            />
+          </Card>
+        </Col>
+      </Row>
+
+      <Card
+        title="Runtime Metrics Trend"
+        extra={
+          <Select
+            value={metricsWindow}
+            onChange={setMetricsWindow}
+            options={[
+              { label: "30m", value: 30 },
+              { label: "60m", value: 60 },
+              { label: "120m", value: 120 },
+            ]}
+            style={{ width: 110 }}
+          />
+        }
+      >
+        <Row gutter={12}>
+          <Col xs={24} xl={8}>
+            <MetricLineChart title="Memory RSS" points={metricPoints} selector={(p) => p.memory_rss_mb} unit="MB" color="#0284c7" />
+          </Col>
+          <Col xs={24} xl={8}>
+            <MetricLineChart title="Process Count" points={metricPoints} selector={(p) => p.process_count} unit="proc" color="#16a34a" />
+          </Col>
+          <Col xs={24} xl={8}>
+            <MetricLineChart title="Load (1m)" points={metricPoints} selector={(p) => p.load_1m} unit="load" color="#f59e0b" />
+          </Col>
+        </Row>
+      </Card>
+
+      <Card
+        title="Worker Execution Timeline"
+        extra={
+          <Select
+            value={timelineWindow}
+            onChange={setTimelineWindow}
+            options={[
+              { label: "1h", value: 60 },
+              { label: "3h", value: 180 },
+              { label: "6h", value: 360 },
+            ]}
+            style={{ width: 110 }}
+          />
+        }
+      >
+        <WorkerTimeline data={timelineQuery.data} />
+      </Card>
+
+      <Row gutter={16}>
+        <Col xs={24} md={8}>
+          <Card>
+            <Statistic
               title="Process Count (Now / 30m Max)"
               value={
                 worker.process_count != null || worker.process_count_max_30m != null
@@ -102,8 +362,16 @@ export function WorkerDetailPage() {
           <Descriptions.Item label="Subnet">{worker.subnet || "-"}</Descriptions.Item>
           <Descriptions.Item label="Python">{worker.python_version || "-"}</Descriptions.Item>
           <Descriptions.Item label="Run User">{worker.run_user || "-"}</Descriptions.Item>
+          <Descriptions.Item label="Connectivity">{worker.connectivity_status ?? worker.status}</Descriptions.Item>
+          <Descriptions.Item label="Dispatch State">{worker.dispatch_status ?? worker.state ?? "-"}</Descriptions.Item>
+          <Descriptions.Item label="Heartbeat Age">
+            {typeof worker.heartbeat_age_seconds === "number" ? `${worker.heartbeat_age_seconds.toFixed(1)}s` : "-"}
+          </Descriptions.Item>
+          <Descriptions.Item label="Running Users">
+            {worker.running_users?.length ? worker.running_users.join(", ") : "-"}
+          </Descriptions.Item>
           <Descriptions.Item label="Last heartbeat">
-            {worker.last_heartbeat ? new Date(worker.last_heartbeat).toLocaleString() : "-"}
+            {worker.last_heartbeat ? new Date(worker.last_heartbeat * 1000).toLocaleString() : "-"}
           </Descriptions.Item>
           <Descriptions.Item label="Metrics updated">
             {worker.metrics_updated_at ? new Date(worker.metrics_updated_at * 1000).toLocaleString() : "-"}
@@ -123,11 +391,10 @@ export function WorkerDetailPage() {
             </Button>
             <Button
               size="small"
-              danger
-              onClick={() => setStateMutation.mutate("disabled")}
+              onClick={() => setStateMutation.mutate("offline")}
               loading={setStateMutation.isPending}
             >
-              Disable
+              Offline
             </Button>
           </Space>
         }
@@ -148,6 +415,32 @@ export function WorkerDetailPage() {
           dataSource={worker.running_jobs ?? []}
           locale={{ emptyText: "No running jobs on this worker." }}
           renderItem={(jobId: string) => <List.Item>{jobId}</List.Item>}
+        />
+      </Card>
+
+      <Card title="Operational Timeline">
+        <List
+          loading={operationsQuery.isLoading}
+          dataSource={operationsQuery.data?.events ?? []}
+          locale={{ emptyText: "No operational events yet." }}
+          renderItem={(event: WorkerOperation) => (
+            <List.Item>
+              <Space direction="vertical" style={{ width: "100%" }} size={2}>
+                <Space wrap>
+                  <Tag color={opColor(event.type)}>{event.type}</Tag>
+                  <Typography.Text strong>{event.message}</Typography.Text>
+                  <Typography.Text type="secondary">{new Date(event.ts * 1000).toLocaleString()}</Typography.Text>
+                </Space>
+                {event.details && Object.keys(event.details).length > 0 && (
+                  <Typography.Text type="secondary">
+                    {Object.entries(event.details)
+                      .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
+                      .join(" · ")}
+                  </Typography.Text>
+                )}
+              </Space>
+            </List.Item>
+          )}
         />
       </Card>
     </Space>

@@ -3,10 +3,12 @@ import { useEffect, useState } from "react";
 import { setActiveDomain as storeDomain, setTokenForDomain, forgetToken, getAdminToken, hasTokenForDomain } from "../api/client";
 import { useDomains } from "../hooks/useDomains";
 import { useActiveDomain } from "../context/ActiveDomainContext";
+import { useTheme } from "../theme";
 
 export function DomainSelector({ onChange }: { onChange?: (domain: string) => void }) {
   const domainOptions = useDomains();
   const { domain: current, setDomain } = useActiveDomain();
+  const { colors } = useTheme();
   const [switchModal, setSwitchModal] = useState<{ open: boolean; domain?: string; token?: string }>({ open: false });
   const adminToken = getAdminToken();
   const availableDomains = domainOptions.map((o) => o.domain);
@@ -24,7 +26,7 @@ export function DomainSelector({ onChange }: { onChange?: (domain: string) => vo
   return (
     <Space>
       <Space direction="vertical" size={0}>
-        <Typography.Text style={{ color: "#cbd5f5" }}>Active Domain</Typography.Text>
+        <Typography.Text style={{ color: colors.textSecondary }}>Active Domain</Typography.Text>
         <Tag color={hasTokenForDomain(current) ? "green" : "volcano"} style={{ marginTop: 2 }}>
           {hasTokenForDomain(current) ? "Token saved" : "No token"}
         </Tag>

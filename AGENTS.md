@@ -8,7 +8,7 @@ Hydra Jobs is a distributed job runner designed for flexibility and scalability.
 
 *   **Scheduler Service:** A Python FastAPI application that exposes a REST API for job management. It handles job submission, validation, scheduling (cron/interval), and dispatching to workers via Redis. It also supports Server-Sent Events (SSE) for real-time updates.
     *   **AI Integration:** Uses Google Gemini or OpenAI for generating job definitions from natural language and analyzing job failures.
-*   **Worker Service:** A Python application that consumes jobs from Redis queues. It supports various execution environments (shell, python, batch) and handles concurrency, heartbeats, and result reporting to MongoDB.
+*   **Worker Service:** A Python application that consumes jobs from Redis queues. It supports various execution environments (shell, python, batch), handles concurrency/heartbeats, streams logs, and emits run lifecycle events to Redis (scheduler persists them to MongoDB).
     *   **Git Support:** Can clone and execute code directly from Git repositories.
 *   **UI:** A React application built with Vite, TypeScript, and Ant Design. It provides a visual interface for monitoring jobs, workers, and run history, with integrated AI tools.
 *   **Data Store:**
@@ -25,14 +25,15 @@ Hydra Jobs is a distributed job runner designed for flexibility and scalability.
 
 ## Workflow & Architecture (Internal Details)
 
-- Scheduler (`scheduler/`) runs three background loops: `scheduling_loop` dispatches jobs from `job_queue:<domain>:pending` to `job_queue:<domain>:<worker_id>`, `failover_loop` requeues jobs from offline workers, and `schedule_trigger_loop` advances cron/interval jobs. API auth is enforced via `ADMIN_TOKEN` or domain tokens hashed in Mongo/Redis, and non-admin requests must include both domain + token.
+- Scheduler (`scheduler/`) runs four background loops: `scheduling_loop` dispatches jobs from `job_queue:<domain>:pending` to `job_queue:<domain>:<worker_id>`, `failover_loop` requeues jobs from offline workers, `schedule_trigger_loop` advances cron/interval jobs, and `run_event_loop` consumes `run_events:<domain>` from Redis and persists run docs in Mongo.
 - Scheduler admin API can provision domain-scoped Redis ACL worker users (`/admin/domains/{domain}/redis_acl/rotate`) and returns `REDIS_USERNAME` + `REDIS_PASSWORD` for worker startup.
 - Scheduler worker APIs include:
-  - `GET /workers/` with runtime + 30m metrics summary (memory/process/load), running jobs, and running users.
+  - `GET /workers/` with runtime + 30m metrics summary (memory/process/load), running jobs/users, plus clear `connectivity_status` and `dispatch_status`.
   - `GET /workers/{worker_id}/metrics` for time-series points.
   - `GET /workers/{worker_id}/timeline` for per-worker execution spans (for Gantt/timeline UI).
-  - `POST /workers/{worker_id}/state` with JSON body `{ "state": "online|draining|disabled" }`.
-- Worker (`worker/`) registers itself in Redis with tags/allowed users/domain token hash, heartbeats every 2s, BLPOPs its queue, tracks `current_running`/`worker_running_set`, streams logs to Redis (per-domain channels), and writes run docs to Mongo via `record_run_start`/`record_run_end`.
+  - `GET /workers/{worker_id}/operations` for operational timeline events (start/restart/dispatch/run lifecycle/state changes/failover).
+  - `POST /workers/{worker_id}/state` with JSON body `{ "state": "online|draining|offline" }` (`disabled` accepted as legacy alias).
+- Worker (`worker/`) registers itself in Redis with tags/allowed users/domain token hash, heartbeats every 2s, BLPOPs its queue, tracks `current_running`/`worker_running_set`, streams logs to Redis (per-domain channels), emits run events to `run_events:<domain>`, and records worker operations to `worker_ops:<domain>:<worker_id>`.
 - Worker no longer mutates global domain registry keys; worker Redis writes are domain-scoped to heartbeat/status/queue/log keys.
 - Worker heartbeat stores rolling metrics in Redis (`worker_metrics:<domain>:<worker_id>:history`) including `memory_rss_mb`, `process_count`, and Linux load averages.
 - Jobs support `bypass_concurrency`; scheduler can dispatch these even when workers are at quota, and workers execute them outside normal `ThreadPoolExecutor` limits.
@@ -41,8 +42,10 @@ Hydra Jobs is a distributed job runner designed for flexibility and scalability.
 - UI (`ui/`) consumes the scheduler API/SSE for jobs, workers, history, and log streaming. Docker Compose builds and serves it on port 5173; adjust `VITE_API_BASE_URL` as needed.
 - UI auth/UX notes:
   - Login gate: when unauthenticated, only the auth modal/screen is shown.
-  - Header has tabbed nav, persistent dark/light toggle, and a Settings drawer for domain/token/admin actions.
-  - Worker detail page includes metrics trend plotting + concurrency-lane timeline/Gantt.
+  - Header has tabbed nav (including Admin), persistent dark/light toggle, and a Settings drawer for domain/token/admin actions.
+  - Worker detail page includes metrics trend plotting + concurrency-lane timeline/Gantt + operational event timeline.
+  - Logs view supports search/highlight, parsed/raw modes, expansion, and copy actions.
+  - AI log helper supports multiple analysis modes (failure fix, summary, error extraction, retry tuning, custom question).
   - Theme and key panel states persist via localStorage.
 
 ## Project Structure & Key Modules
@@ -53,7 +56,7 @@ Hydra Jobs is a distributed job runner designed for flexibility and scalability.
 - `scheduler/api/ai.py` — AI endpoints (Generate/Analyze).
 - `scheduler/models/*` define Pydantic models for jobs, runs, workers, executors, and scheduling.
 - `scheduler/utils/*` house affinity checks, worker selection, failover logic, auth helpers, schedule math, and logging setup.
-- `worker/worker.py` registers the worker, maintains heartbeats, and executes jobs concurrently via `ThreadPoolExecutor`.
+- `worker/worker.py` registers the worker, maintains heartbeats, executes jobs, emits `run_start`/`run_end` events to Redis, and records worker operation events.
 - `worker/utils/*` contain shell/exec helpers, python env prep (`uv`/venv/system), completion criteria evaluation, concurrency counters, and heartbeats.
 - `worker/utils/git.py` — Git clone/checkout logic.
 - `worker/executor.py` — Job execution engine (shell/python/batch/external) with git source support.
@@ -100,7 +103,7 @@ Workers can be run independently to scale processing power.
 
 ```bash
 API_TOKEN=<domain_token> WORKER_DOMAIN=prod \
-REDIS_URL=redis://localhost:6379/0 MONGO_URL=mongodb://localhost:27017 \
+REDIS_URL=redis://localhost:6379/0 REDIS_USERNAME=<acl_user> REDIS_PASSWORD=<acl_password> \
 docker compose -f docker-compose.worker.yml up --build
 
 # Scale workers (WORKER_ID defaults to auto-generated unique IDs)
@@ -188,7 +191,7 @@ Located in `scripts/`:
 ## AI Features
 
 *   **Magic Job Generator:** In the UI "New Job" form, use natural language to generate job JSON. Select between Gemini and OpenAI from the dropdown.
-*   **Failure Analysis:** In the Run Logs view, click "Analyze Failure" to get AI-driven remediation steps. Select between Gemini and OpenAI.
+*   **AI Log Assistant:** In Run Logs, use AI helper actions for remediation, summary, error extraction, retry tuning, or custom questions. Select between Gemini and OpenAI.
 *   **Configuration:** Ensure `GEMINI_API_KEY` and/or `OPENAI_API_KEY` are set in the Scheduler environment.
 
 ## Git Source Execution

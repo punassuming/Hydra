@@ -9,8 +9,7 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - REDIS_USERNAME=${REDIS_USERNAME:-}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-      - MONGO_URL=${MONGO_URL:-mongodb://mongo:27017}
-      - MONGO_DB=${MONGO_DB:-hydra_jobs}
+      - WORKER_REQUIRE_REDIS_ACL=${WORKER_REQUIRE_REDIS_ACL:-true}
       - WORKER_ID=${WORKER_ID:-}
       - WORKER_DOMAIN=${WORKER_DOMAIN:-prod}
       - API_TOKEN=${API_TOKEN}

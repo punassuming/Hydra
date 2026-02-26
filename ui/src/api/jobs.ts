@@ -10,6 +10,9 @@ import {
   JobGanttData,
   JobGraphData,
   JobStatistics,
+  WorkerMetricsData,
+  WorkerTimelineData,
+  WorkerOperationsData,
 } from "../types";
 
 export interface JobPayload {
@@ -20,6 +23,7 @@ export interface JobPayload {
   executor: JobDefinition["executor"];
   retries: number;
   timeout: number;
+  bypass_concurrency?: boolean;
   schedule: ScheduleConfig;
   completion: CompletionCriteria;
   tags?: string[];
@@ -40,6 +44,12 @@ export const fetchJobs = (params?: { search?: string; tags?: string }) => {
 };
 export const fetchJob = (jobId: string) => apiClient.get<JobDefinition>(`/jobs/${jobId}`);
 export const fetchWorkers = () => apiClient.get<WorkerInfo[]>("/workers/");
+export const fetchWorkerMetrics = (workerId: string, minutes = 30) =>
+  apiClient.get<WorkerMetricsData>(`/workers/${workerId}/metrics?minutes=${minutes}`);
+export const fetchWorkerTimeline = (workerId: string, minutes = 180) =>
+  apiClient.get<WorkerTimelineData>(`/workers/${workerId}/timeline?minutes=${minutes}`);
+export const fetchWorkerOperations = (workerId: string, limit = 250) =>
+  apiClient.get<WorkerOperationsData>(`/workers/${workerId}/operations?limit=${limit}`);
 export const fetchJobRuns = (jobId: string) => apiClient.get<JobRun[]>(`/jobs/${jobId}/runs`);
 export const fetchJobOverview = () => apiClient.get<JobOverview[]>("/overview/jobs");
 export const fetchJobStatistics = () => apiClient.get<JobStatistics>("/overview/statistics");
@@ -58,8 +68,15 @@ export const runAdhocJob = (payload: JobPayload) => apiClient.post<JobDefinition
 export const generateJob = (prompt: string, provider: "gemini" | "openai" = "gemini", model?: string) => 
     apiClient.post<JobPayload>("/ai/generate_job", { prompt, provider, model });
 
-export const analyzeRun = (payload: { run_id: string; stdout: string; stderr: string; exit_code: number; provider?: "gemini" | "openai"; model?: string }) => 
+export const analyzeRun = (payload: {
+  run_id: string;
+  stdout: string;
+  stderr: string;
+  exit_code: number;
+  provider?: "gemini" | "openai";
+  model?: string;
+  analysis_type?: "failure" | "summary" | "errors" | "retry" | "custom";
+  question?: string;
+}) =>
     apiClient.post<{ analysis: string }>("/ai/analyze_run", { provider: "gemini", ...payload });
-
-
 

@@ -53,7 +53,9 @@ class SourceConfig(BaseModel):
 class JobDefinition(BaseModel):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex, alias="_id")
     name: str
+    user: str = "default"
     domain: str = "prod"
+    bypass_concurrency: bool = False
     source: Optional[SourceConfig] = None
     affinity: Affinity
     executor: ExecutorConfig = Field(default_factory=lambda: ShellExecutor(script=""))
@@ -78,7 +80,9 @@ class JobDefinition(BaseModel):
 
 class JobCreate(BaseModel):
     name: str
+    user: str = "default"
     domain: str = "prod"
+    bypass_concurrency: bool = False
     source: Optional[SourceConfig] = None
     affinity: Affinity
     executor: ExecutorConfig = Field(default_factory=lambda: ShellExecutor(script=""))
@@ -92,7 +96,9 @@ class JobCreate(BaseModel):
 
 class JobUpdate(BaseModel):
     name: Optional[str] = None
+    user: Optional[str] = None
     domain: Optional[str] = None
+    bypass_concurrency: Optional[bool] = None
     source: Optional[SourceConfig] = None
     affinity: Optional[Affinity] = None
     executor: Optional[ExecutorConfig] = None

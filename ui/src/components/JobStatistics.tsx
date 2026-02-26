@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchJobStatistics } from "../api/jobs";
 import { Card, Statistic, Row, Col, Progress, Tag, Space } from "antd";
-import { 
+import {
   CheckCircleOutlined, 
   CloseCircleOutlined, 
   SyncOutlined,
@@ -11,9 +11,11 @@ import {
   TagsOutlined
 } from "@ant-design/icons";
 import { useActiveDomain } from "../context/ActiveDomainContext";
+import { useTheme } from "../theme";
 
 export function JobStatistics() {
   const { domain } = useActiveDomain();
+  const { colors } = useTheme();
   const { data, isLoading } = useQuery({
     queryKey: ["job-statistics", domain],
     queryFn: fetchJobStatistics,
@@ -41,8 +43,8 @@ export function JobStatistics() {
           <Statistic
             title="Enabled Jobs"
             value={data.enabled_jobs}
-            prefix={<PlayCircleOutlined style={{ color: "#52c41a" }} />}
-            valueStyle={{ color: "#52c41a" }}
+            prefix={<PlayCircleOutlined style={{ color: colors.success }} />}
+            valueStyle={{ color: colors.success }}
           />
         </Col>
         <Col xs={24} sm={12} md={6}>
@@ -50,7 +52,7 @@ export function JobStatistics() {
             title="Disabled Jobs"
             value={data.disabled_jobs}
             prefix={<PauseCircleOutlined />}
-            valueStyle={{ color: "#999" }}
+            valueStyle={{ color: colors.textSecondary }}
           />
         </Col>
         <Col xs={24} sm={12} md={6}>
@@ -58,7 +60,7 @@ export function JobStatistics() {
             title="Running Now"
             value={data.running_runs}
             prefix={<SyncOutlined spin={data.running_runs > 0} />}
-            valueStyle={{ color: "#1890ff" }}
+            valueStyle={{ color: colors.info }}
           />
         </Col>
       </Row>
@@ -71,18 +73,18 @@ export function JobStatistics() {
               percent={parseFloat(successRate)}
               format={() => `${successRate}%`}
               strokeColor={{
-                "0%": "#108ee9",
-                "100%": "#87d068",
+                "0%": colors.info,
+                "100%": colors.success,
               }}
             />
             <div style={{ marginTop: 16, textAlign: "center" }}>
               <Space>
-                <CheckCircleOutlined style={{ color: "#52c41a" }} />
+                <CheckCircleOutlined style={{ color: colors.success }} />
                 <span>{data.success_runs} successes</span>
               </Space>
               <br />
               <Space>
-                <CloseCircleOutlined style={{ color: "#ff4d4f" }} />
+                <CloseCircleOutlined style={{ color: colors.error }} />
                 <span>{data.failed_runs} failures</span>
               </Space>
             </div>
@@ -121,7 +123,7 @@ export function JobStatistics() {
                   ))}
                 </Space>
               ) : (
-                <span style={{ color: "#999" }}>No tags defined</span>
+                <span style={{ color: colors.textSecondary }}>No tags defined</span>
               )}
             </div>
           </Card>
