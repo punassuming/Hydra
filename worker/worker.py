@@ -39,6 +39,7 @@ def register_worker(worker_id: str, max_concurrency: int):
     import platform
     import socket
     import getpass
+    from .executor import _detect_shells, _detect_capabilities
 
     hostname = socket.gethostname()
     try:
@@ -51,6 +52,9 @@ def register_worker(worker_id: str, max_concurrency: int):
     domain = get_domain()
     worker_key = f"workers:{domain}:{worker_id}"
     is_restart = bool(r.exists(worker_key))
+
+    shells = _detect_shells()
+    capabilities = _detect_capabilities()
 
     meta = {
         "os": platform.system().lower(),
@@ -69,6 +73,8 @@ def register_worker(worker_id: str, max_concurrency: int):
         "subnet": subnet,
         "deployment_type": deployment_type,
         "run_user": getpass.getuser(),
+        "shells": ",".join(shells),
+        "capabilities": ",".join(capabilities),
         "domain_token_hash": __import__("hashlib").sha256(domain_token.encode()).hexdigest(),
     }
     r.hset(worker_key, mapping=meta)

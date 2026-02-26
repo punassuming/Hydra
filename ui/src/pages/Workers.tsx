@@ -43,6 +43,18 @@ export function WorkersPage() {
       render: (tags: string[]) => (tags?.length ? tags.map((tag) => <Tag key={tag}>{tag}</Tag>) : "-"),
     },
     {
+      title: "Shells",
+      dataIndex: "shells",
+      key: "shells",
+      render: (shells: string[]) => (shells?.length ? shells.map((s) => <Tag key={s} color="blue">{s}</Tag>) : "-"),
+    },
+    {
+      title: "Capabilities",
+      dataIndex: "capabilities",
+      key: "capabilities",
+      render: (caps: string[]) => (caps?.length ? caps.map((c) => <Tag key={c} color="cyan">{c}</Tag>) : "-"),
+    },
+    {
       title: "Affinity Users",
       dataIndex: "allowed_users",
       key: "allowed_users",

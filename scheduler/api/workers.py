@@ -197,6 +197,8 @@ def list_workers(request: Request):
                     subnet=data.get("subnet"),
                     deployment_type=data.get("deployment_type"),
                     run_user=data.get("run_user"),
+                    shells=(data.get("shells", "") or "").split(",") if data.get("shells") else [],
+                    capabilities=(data.get("capabilities", "") or "").split(",") if data.get("capabilities") else [],
                     process_count=metrics["process_count"],
                     memory_rss_mb=metrics["memory_rss_mb"],
                     load_1m=metrics["load_1m"],

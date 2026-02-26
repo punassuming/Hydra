@@ -29,6 +29,13 @@ def deployment_matches(job_types: List[str], worker_type: str) -> bool:
     return not job_types or worker_type.lower() in {t.lower() for t in job_types}
 
 
+def executor_types_match(job_exec_types: List[str], worker_capabilities: List[str]) -> bool:
+    if not job_exec_types:
+        return True
+    worker_set = {c.lower() for c in worker_capabilities}
+    return all(t.lower() in worker_set for t in job_exec_types)
+
+
 def passes_affinity(job: Dict, worker: Dict) -> bool:
     affinity = job.get("affinity", {})
     return (
@@ -38,4 +45,5 @@ def passes_affinity(job: Dict, worker: Dict) -> bool:
         and hostnames_match(affinity.get("hostnames", []), worker.get("hostname", ""))
         and subnets_match(affinity.get("subnets", []), worker.get("subnet", ""))
         and deployment_matches(affinity.get("deployment_types", []), worker.get("deployment_type", ""))
+        and executor_types_match(affinity.get("executor_types", []), worker.get("capabilities", []))
     )

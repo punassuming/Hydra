@@ -2,10 +2,13 @@ from fastapi import APIRouter, Request, HTTPException
 from typing import List, Dict
 import secrets
 import hashlib
+from datetime import datetime
 from ..redis_client import get_redis
 from ..mongo_client import get_db
 from ..examples.templates import TEMPLATES
 from ..utils.redis_acl import ensure_worker_acl_user, delete_worker_acl_user, worker_acl_username
+from ..models.credentials import CredentialCreate, CredentialReference
+from ..utils.encryption import encrypt_payload, decrypt_payload
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -153,3 +156,93 @@ def import_template(template_id: str, request: Request):
         raise HTTPException(status_code=409, detail="job with that name already exists in this domain")
     db.job_definitions.insert_one(job_doc)
     return {"ok": True, "job": job_doc}
+
+
+# --- Credential Management ---
+
+
+@router.get("/credentials")
+def list_credentials(request: Request) -> Dict:
+    _require_admin(request)
+    db = get_db()
+    docs = list(db.credentials.find({}))
+    refs = []
+    for doc in docs:
+        refs.append(CredentialReference(
+            name=doc.get("name", ""),
+            credential_type=doc.get("credential_type", "database"),
+            dialect=doc.get("dialect"),
+            created_at=doc.get("created_at"),
+            updated_at=doc.get("updated_at"),
+        ).model_dump())
+    return {"credentials": refs}
+
+
+@router.post("/credentials")
+def create_credential(payload: CredentialCreate, request: Request):
+    _require_admin(request)
+    db = get_db()
+    existing = db.credentials.find_one({"name": payload.name})
+    if existing:
+        raise HTTPException(status_code=409, detail="credential with that name already exists")
+    sensitive = payload.model_dump(exclude={"name", "credential_type", "dialect"})
+    encrypted = encrypt_payload(sensitive)
+    now = datetime.utcnow().isoformat()
+    doc = {
+        "_id": payload.name,
+        "name": payload.name,
+        "credential_type": payload.credential_type,
+        "dialect": payload.dialect,
+        "encrypted_payload": encrypted,
+        "created_at": now,
+        "updated_at": now,
+    }
+    db.credentials.insert_one(doc)
+    return {"ok": True, "name": payload.name}
+
+
+@router.put("/credentials/{name}")
+def update_credential(name: str, payload: CredentialCreate, request: Request):
+    _require_admin(request)
+    db = get_db()
+    existing = db.credentials.find_one({"name": name})
+    if not existing:
+        raise HTTPException(status_code=404, detail="credential not found")
+    sensitive = payload.model_dump(exclude={"name", "credential_type", "dialect"})
+    encrypted = encrypt_payload(sensitive)
+    now = datetime.utcnow().isoformat()
+    db.credentials.update_one(
+        {"name": name},
+        {"$set": {
+            "credential_type": payload.credential_type,
+            "dialect": payload.dialect,
+            "encrypted_payload": encrypted,
+            "updated_at": now,
+        }},
+    )
+    return {"ok": True, "name": name}
+
+
+@router.delete("/credentials/{name}")
+def delete_credential(name: str, request: Request):
+    _require_admin(request)
+    db = get_db()
+    result = db.credentials.delete_one({"name": name})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="credential not found")
+    return {"ok": True}
+
+
+@router.get("/credentials/{name}/resolve")
+def resolve_credential(name: str, request: Request):
+    """Decrypt and return credential payload. Admin only."""
+    _require_admin(request)
+    db = get_db()
+    doc = db.credentials.find_one({"name": name})
+    if not doc:
+        raise HTTPException(status_code=404, detail="credential not found")
+    try:
+        decrypted = decrypt_payload(doc["encrypted_payload"])
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"decryption failed: {exc}")
+    return {"name": name, "credential_type": doc.get("credential_type"), **decrypted}

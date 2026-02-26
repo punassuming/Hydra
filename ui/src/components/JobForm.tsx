@@ -26,6 +26,7 @@ const defaultAffinity = {
   hostnames: [] as string[],
   subnets: [] as string[],
   deployment_types: [] as string[],
+  executor_types: [] as string[],
 };
 
 const createDefaultPythonEnvironment = (): PythonEnvironment => ({
@@ -55,6 +56,7 @@ const createDefaultPayload = (): JobPayload => ({
     hostnames: [],
     subnets: [],
     deployment_types: [],
+    executor_types: [],
   },
   executor: { type: "shell", script: "echo 'hello world'", shell: "bash" },
   retries: 0,
@@ -134,6 +136,8 @@ export function JobForm({
       subnets: collect((w) => w.subnet),
       deployments: collect((w) => w.deployment_type),
       pythonVersions: collect((w) => w.python_version),
+      capabilities: collect((w) => w.capabilities),
+      shells: collect((w) => w.shells),
     };
   }, [workersQuery.data]);
 
@@ -269,6 +273,8 @@ export function JobForm({
             python: createDefaultPythonExecutor(),
             shell: { type: "shell", script: "echo 'hello world'", shell: "bash" },
             batch: { type: "batch", script: "echo hello", shell: "cmd" },
+            powershell: { type: "powershell", script: "Write-Host 'hello world'", shell: "pwsh" },
+            sql: { type: "sql", dialect: "postgres", query: "SELECT 1;", connection_uri: "", database: "" },
             external: { type: "external", command: "/usr/bin/env" },
           };
           updateExecutor(defaults[nextType]);
@@ -276,7 +282,9 @@ export function JobForm({
         options={[
           { label: "Shell", value: "shell" },
           { label: "Batch", value: "batch" },
+          { label: "PowerShell", value: "powershell" },
           { label: "Python", value: "python" },
+          { label: "SQL / Database", value: "sql" },
           { label: "External Binary", value: "external" },
         ]}
       />
@@ -460,6 +468,103 @@ export function JobForm({
                     placeholder="/opt/jobs"
                   />
                 </Form.Item>
+              </>
+            )}
+
+            {executor.type === "powershell" && (
+              <>
+                <Row gutter={16}>
+                  <Col xs={24} md={12}>
+                    <Form.Item label="Shell">
+                      <Select
+                        value={(executor as any).shell ?? "pwsh"}
+                        onChange={(val) => updateExecutor({ shell: val })}
+                        options={[
+                          { label: "pwsh (cross-platform)", value: "pwsh" },
+                          { label: "powershell (Windows)", value: "powershell" },
+                        ]}
+                      />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Form.Item label="Working Directory">
+                      <Input
+                        value={executor.workdir ?? ""}
+                        onChange={(e) => updateExecutor({ workdir: e.target.value || null })}
+                        placeholder="/opt/jobs"
+                      />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <Form.Item label="PowerShell Script">
+                  <Input.TextArea
+                    value={(executor as any).script ?? ""}
+                    onChange={(e) => updateExecutor({ script: e.target.value })}
+                    autoSize={{ minRows: 8 }}
+                    placeholder="Write-Host 'Hello from PowerShell'"
+                  />
+                </Form.Item>
+              </>
+            )}
+
+            {executor.type === "sql" && (
+              <>
+                <Row gutter={16}>
+                  <Col xs={24} md={8}>
+                    <Form.Item label="Dialect">
+                      <Select
+                        value={(executor as any).dialect ?? "postgres"}
+                        onChange={(val) => updateExecutor({ dialect: val })}
+                        options={[
+                          { label: "PostgreSQL", value: "postgres" },
+                          { label: "MySQL", value: "mysql" },
+                          { label: "SQL Server", value: "mssql" },
+                          { label: "Oracle", value: "oracle" },
+                          { label: "MongoDB", value: "mongodb" },
+                        ]}
+                      />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={8}>
+                    <Form.Item label="Database">
+                      <Input
+                        value={(executor as any).database ?? ""}
+                        onChange={(e) => updateExecutor({ database: e.target.value })}
+                        placeholder="mydb"
+                      />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={8}>
+                    <Form.Item label="Credential Reference">
+                      <Input
+                        value={(executor as any).credential_ref ?? ""}
+                        onChange={(e) => updateExecutor({ credential_ref: e.target.value || null })}
+                        placeholder="stored credential name (optional)"
+                      />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <Form.Item label="Connection URI">
+                  <Input
+                    value={(executor as any).connection_uri ?? ""}
+                    onChange={(e) => updateExecutor({ connection_uri: e.target.value })}
+                    placeholder="postgresql://user:pass@host:5432/db"
+                  />
+                </Form.Item>
+                <Form.Item label="SQL Query">
+                  <Input.TextArea
+                    value={(executor as any).query ?? ""}
+                    onChange={(e) => updateExecutor({ query: e.target.value })}
+                    autoSize={{ minRows: 8 }}
+                    placeholder="SELECT * FROM table LIMIT 10;"
+                  />
+                </Form.Item>
+                <Alert
+                  type="info"
+                  showIcon
+                  message="Workers require sqlalchemy (relational) or pymongo (MongoDB) to be installed. Credentials can be stored encrypted via Admin > Credentials."
+                  style={{ marginBottom: 12 }}
+                />
               </>
             )}
 
@@ -762,6 +867,19 @@ export function JobForm({
                     onChange={(vals) => updateAffinity("deployment_types", vals)}
                     options={workerHints.deployments.map((v) => ({ label: v, value: v }))}
                     placeholder="docker, kubernetes, bare-metal"
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Row gutter={16}>
+              <Col xs={24} md={12}>
+                <Form.Item label="Required Executor Types">
+                  <Select
+                    mode="tags"
+                    value={payload.affinity.executor_types ?? []}
+                    onChange={(vals) => updateAffinity("executor_types", vals)}
+                    options={workerHints.capabilities.map((v) => ({ label: v, value: v }))}
+                    placeholder="shell, python, powershell, sql"
                   />
                 </Form.Item>
               </Col>

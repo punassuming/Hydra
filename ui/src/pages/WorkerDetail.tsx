@@ -408,6 +408,12 @@ export function WorkerDetailPage() {
         <Typography.Paragraph style={{ marginTop: 12, marginBottom: 0 }}>
           Allowed users: {worker.allowed_users?.length ? worker.allowed_users.join(", ") : "any"}
         </Typography.Paragraph>
+        <Typography.Paragraph style={{ marginTop: 8, marginBottom: 0 }}>
+          Shells: {(worker.shells ?? []).length ? (worker.shells ?? []).map((s) => <Tag key={s} color="blue">{s}</Tag>) : <Typography.Text type="secondary">none detected</Typography.Text>}
+        </Typography.Paragraph>
+        <Typography.Paragraph style={{ marginTop: 8, marginBottom: 0 }}>
+          Capabilities: {(worker.capabilities ?? []).length ? (worker.capabilities ?? []).map((c) => <Tag key={c} color="cyan">{c}</Tag>) : <Typography.Text type="secondary">none detected</Typography.Text>}
+        </Typography.Paragraph>
       </Card>
 
       <Card title="Running jobs">
