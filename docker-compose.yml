@@ -7,6 +7,7 @@ services:
   mongo:
     # mongo:6 requires AVX; use 5.x for broader CPU support
     image: mongo:6.0
+    command: ["mongod", "--bind_ip_all", "--setParameter", "diagnosticDataCollectionEnabled=false"]
     ports:
       - "27017:27017"
     volumes:
