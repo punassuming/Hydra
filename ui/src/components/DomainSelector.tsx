@@ -1,5 +1,5 @@
 import { Select, Space, Typography, Button, Modal, Input, Tag } from "antd";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { setActiveDomain as storeDomain, setTokenForDomain, forgetToken, getAdminToken, hasTokenForDomain } from "../api/client";
 import { useDomains } from "../hooks/useDomains";
 import { useActiveDomain } from "../context/ActiveDomainContext";
@@ -9,6 +9,17 @@ export function DomainSelector({ onChange }: { onChange?: (domain: string) => vo
   const { domain: current, setDomain } = useActiveDomain();
   const [switchModal, setSwitchModal] = useState<{ open: boolean; domain?: string; token?: string }>({ open: false });
   const adminToken = getAdminToken();
+  const availableDomains = domainOptions.map((o) => o.domain);
+
+  useEffect(() => {
+    if (!availableDomains.length || availableDomains.includes(current)) {
+      return;
+    }
+    const fallback = availableDomains.includes("prod") ? "prod" : availableDomains[0];
+    storeDomain(fallback);
+    setDomain(fallback);
+    onChange?.(fallback);
+  }, [availableDomains, current, onChange, setDomain]);
 
   return (
     <Space>
