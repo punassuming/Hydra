@@ -112,6 +112,25 @@ textarea {
   margin-right: 0.25rem;
 }
 
+.header-nav-tabs .ant-segmented-group {
+  gap: 2px;
+}
+
+.header-nav-tabs .ant-segmented-item-label {
+  padding: 7px 12px;
+  font-weight: 600;
+}
+
+.header-nav-tabs {
+  background: rgba(148, 163, 184, 0.18);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 12px;
+}
+
+body .ant-segmented-thumb {
+  border-radius: 10px;
+}
+
 /* Responsive styles */
 @media (max-width: 768px) {
   .hide-on-mobile {
@@ -125,6 +144,10 @@ textarea {
   .responsive-menu {
     min-width: 100%;
   }
+
+  .header-nav-tabs {
+    width: 100%;
+  }
 }
 
 @media (min-width: 769px) {
@@ -132,4 +155,3 @@ textarea {
     padding: 24px !important;
   }
 }
-

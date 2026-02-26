@@ -1,17 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { Layout, Typography, Space, Menu, Switch as AntSwitch, Tag } from "antd";
-import { Routes, Route, Link, useLocation } from "react-router-dom";
+import { Layout, Typography, Space, Segmented } from "antd";
+import { Routes, Route, useLocation, useNavigate } from "react-router-dom";
 import { ConfigProvider, theme } from "antd";
 import { HomePage } from "./pages/Home";
 import { BrowsePage } from "./pages/Browse";
-import { ComingSoon } from "./pages/ComingSoon";
 import { JobDetailPage } from "./pages/JobDetail";
 import { HistoryPage } from "./pages/History";
 import { StatusPage } from "./pages/Status";
 import { WorkersPage } from "./pages/Workers";
 import { AdminPage } from "./pages/Admin";
 import { HydraLogo } from "./components/HydraLogo";
-import { DomainSelector } from "./components/DomainSelector";
+import { HeaderSettings } from "./components/HeaderSettings";
 import { AuthPrompt } from "./components/AuthPrompt";
 import { AUTH_REQUIRED_EVENT, hasAnyToken } from "./api/client";
 import { WorkerDetailPage } from "./pages/WorkerDetail";
@@ -20,7 +19,8 @@ import { ThemeProvider, useTheme } from "./theme";
 
 function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (dark: boolean) => void }) {
   const location = useLocation();
-  const { domain: activeDomain, setDomain: setActiveDomain } = useActiveDomain();
+  const navigate = useNavigate();
+  const { domain: activeDomain } = useActiveDomain();
   const [authOpen, setAuthOpen] = useState(!hasAnyToken());
   const { colors } = useTheme();
   const { Header, Content } = Layout;
@@ -34,37 +34,23 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
     window.addEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
     return () => window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
   }, []);
-  const menuItems = useMemo(
+  const navItems = useMemo(
     () => [
-      {
-        label: "Operate",
-        key: "operate",
-        children: [
-          { label: <Link to="/">Jobs</Link>, key: "operate-home" },
-          { label: <Link to="/browse">Job Browser</Link>, key: "operate-browse" },
-          { label: <Link to="/workers">Workers</Link>, key: "operate-workers" },
-        ],
-      },
-      {
-        label: "Observe",
-        key: "observe",
-        children: [
-          { label: <Link to="/status">Status</Link>, key: "observe-status" },
-          { label: <Link to="/history">History</Link>, key: "observe-history" },
-        ],
-      },
-      { label: <Link to="/admin">Admin</Link>, key: "admin" },
+      { value: "jobs", label: "Jobs", path: "/" },
+      { value: "browse", label: "Browse", path: "/browse" },
+      { value: "workers", label: "Workers", path: "/workers" },
+      { value: "status", label: "Status", path: "/status" },
+      { value: "history", label: "History", path: "/history" },
     ],
     [],
   );
-
-  const currentKey = useMemo(() => {
-    if (location.pathname.startsWith("/status")) return "observe-status";
-    if (location.pathname.startsWith("/history")) return "observe-history";
-    if (location.pathname.startsWith("/browse")) return "operate-browse";
-    if (location.pathname.startsWith("/workers")) return "operate-workers";
-    if (location.pathname.startsWith("/admin")) return "admin";
-    return "operate-home";
+  const currentNav = useMemo(() => {
+    if (location.pathname.startsWith("/browse")) return "browse";
+    if (location.pathname.startsWith("/workers")) return "workers";
+    if (location.pathname.startsWith("/status")) return "status";
+    if (location.pathname.startsWith("/history")) return "history";
+    if (location.pathname.startsWith("/admin")) return undefined;
+    return "jobs";
   }, [location.pathname]);
 
   if (authOpen) {
@@ -96,14 +82,20 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
       <Layout>
         <Header
           style={{
-            padding: "12px 24px",
-            minHeight: 72,
+            padding: "12px 18px",
+            minHeight: 82,
             lineHeight: "normal",
             position: "sticky",
             top: 0,
             zIndex: 1000,
             width: "100%",
-            background: colors.headerBg,
+            background: darkMode
+              ? "linear-gradient(115deg, #020617 0%, #0f172a 55%, #1e293b 100%)"
+              : "linear-gradient(115deg, #ffffff 0%, #f8fbff 60%, #e7efff 100%)",
+            borderBottom: `1px solid ${colors.border}`,
+            boxShadow: darkMode
+              ? "0 6px 24px rgba(2, 6, 23, 0.45)"
+              : "0 6px 24px rgba(15, 23, 42, 0.08)",
           }}
         >
           <div
@@ -112,7 +104,7 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
               alignItems: "center",
               justifyContent: "space-between",
               flexWrap: "wrap",
-              gap: "12px",
+              gap: "14px",
             }}
           >
             <Space align="center" wrap>
@@ -120,14 +112,19 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
               <Space size={12} align="baseline" style={{ flexWrap: "wrap" }}>
                 <Typography.Title
                   level={3}
-                  style={{ color: colors.textPrimary, margin: 0, fontSize: "clamp(16px, 4vw, 24px)" }}
+                  style={{
+                    color: darkMode ? "#e2e8f0" : "#0f172a",
+                    margin: 0,
+                    fontSize: "clamp(16px, 4vw, 24px)",
+                    letterSpacing: "0.2px",
+                  }}
                 >
                   Hydra Scheduler
                 </Typography.Title>
-                <Typography.Text 
-                  style={{ 
-                    color: colors.textSecondary, 
-                    fontSize: "clamp(12px, 2vw, 14px)"
+                <Typography.Text
+                  style={{
+                    color: darkMode ? "#94a3b8" : "#334155",
+                    fontSize: "clamp(12px, 2vw, 14px)",
                   }}
                   className="hide-on-mobile"
                 >
@@ -136,28 +133,22 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
               </Space>
             </Space>
             <Space align="center" size="large" style={{ flexWrap: "wrap" }}>
-              <Menu
-                theme="dark"
-                mode="horizontal"
-                selectedKeys={[currentKey]}
-                items={menuItems}
-                style={{ 
-                  background: "transparent", 
-                  borderBottom: "none"
+              <Segmented
+                className="header-nav-tabs"
+                value={currentNav}
+                options={navItems.map((item) => ({ label: item.label, value: item.value }))}
+                onChange={(value) => {
+                  const next = navItems.find((item) => item.value === value);
+                  if (next) {
+                    navigate(next.path);
+                  }
                 }}
-                className="responsive-menu"
               />
               <Space size={12} align="center" wrap>
-                <Tag color="cyan" style={{ marginRight: 0 }}>
-                  Domain: {activeDomain}
-                </Tag>
-                <DomainSelector onChange={setActiveDomain} />
-              </Space>
-              <Space wrap>
-                <Typography.Text style={{ color: colors.textSecondary, fontSize: "14px" }}>
-                  Dark Mode
+                <Typography.Text style={{ color: darkMode ? "#cbd5e1" : "#1e293b", fontSize: 13 }}>
+                  Domain: <strong>{activeDomain}</strong>
                 </Typography.Text>
-                <AntSwitch checked={darkMode} onChange={setDarkMode} />
+                <HeaderSettings darkMode={darkMode} setDarkMode={setDarkMode} />
               </Space>
             </Space>
           </div>
