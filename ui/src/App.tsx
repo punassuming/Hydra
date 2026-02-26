@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Layout, Typography, Space, Menu, Switch as AntSwitch, Tag } from "antd";
 import { Routes, Route, Link, useLocation } from "react-router-dom";
 import { ConfigProvider, theme } from "antd";
@@ -13,17 +13,27 @@ import { AdminPage } from "./pages/Admin";
 import { HydraLogo } from "./components/HydraLogo";
 import { DomainSelector } from "./components/DomainSelector";
 import { AuthPrompt } from "./components/AuthPrompt";
-import { hasAnyToken } from "./api/client";
+import { AUTH_REQUIRED_EVENT, hasAnyToken } from "./api/client";
 import { WorkerDetailPage } from "./pages/WorkerDetail";
 import { ActiveDomainProvider, useActiveDomain } from "./context/ActiveDomainContext";
 import { ThemeProvider, useTheme } from "./theme";
 
 function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (dark: boolean) => void }) {
   const location = useLocation();
-  const [authOpen, setAuthOpen] = useState(!hasAnyToken());
   const { domain: activeDomain, setDomain: setActiveDomain } = useActiveDomain();
+  const [authOpen, setAuthOpen] = useState(!hasAnyToken());
   const { colors } = useTheme();
   const { Header, Content } = Layout;
+
+  useEffect(() => {
+    setAuthOpen(!hasAnyToken());
+  }, [activeDomain]);
+
+  useEffect(() => {
+    const onAuthRequired = () => setAuthOpen(true);
+    window.addEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+    return () => window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+  }, []);
   const menuItems = useMemo(
     () => [
       {
@@ -56,6 +66,22 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
     if (location.pathname.startsWith("/admin")) return "admin";
     return "operate-home";
   }, [location.pathname]);
+
+  if (authOpen) {
+    return (
+      <Layout style={{ minHeight: "100vh", background: colors.bgSecondary }}>
+        <Content style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <AuthPrompt
+            open
+            onClose={() => {}}
+            onSuccess={() => {
+              setAuthOpen(!hasAnyToken());
+            }}
+          />
+        </Content>
+      </Layout>
+    );
+  }
 
   return (
     <ConfigProvider
@@ -160,7 +186,6 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
             <Route path="/jobs/:jobId" element={<JobDetailPage />} />
           </Routes>
         </Content>
-        <AuthPrompt open={authOpen} onClose={() => setAuthOpen(false)} onSuccess={() => setAuthOpen(false)} />
       </Layout>
     </ConfigProvider>
   );

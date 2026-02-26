@@ -4,6 +4,7 @@ type TokenMap = Record<string, string>;
 
 const TOKEN_MAP_KEY = "hydra_token_map";
 const ACTIVE_DOMAIN_KEY = "hydra_domain";
+export const AUTH_REQUIRED_EVENT = "hydra-auth-required";
 
 function readTokenMap(): TokenMap {
   try {
@@ -41,14 +42,22 @@ export function hasAnyToken(): boolean {
   return Object.keys(map).length > 0;
 }
 
+export function hasAuthContext(domain?: string): boolean {
+  return getTokenContext(domain).source !== "none";
+}
+
 export function forgetToken(domain?: string) {
   if (!domain) {
     localStorage.removeItem(TOKEN_MAP_KEY);
+    window.dispatchEvent(new CustomEvent(AUTH_REQUIRED_EVENT));
     return;
   }
   const map = readTokenMap();
   delete map[domain];
   writeTokenMap(map);
+  if (Object.keys(map).length === 0) {
+    window.dispatchEvent(new CustomEvent(AUTH_REQUIRED_EVENT));
+  }
 }
 
 export function setActiveDomain(domain: string) {
@@ -96,6 +105,9 @@ export function withTempToken<T>(token: string | undefined, fn: () => Promise<T>
 
 async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
+    if (res.status === 401) {
+      window.dispatchEvent(new CustomEvent(AUTH_REQUIRED_EVENT));
+    }
     const detail = await res.json().catch(() => ({}));
     throw new Error(detail?.detail ?? res.statusText);
   }
@@ -109,7 +121,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers.set("x-api-key", token);
   }
   const url = new URL(path, API_BASE);
-  if (source === "admin" && !url.searchParams.has("domain")) {
+  if (!url.searchParams.has("domain")) {
     url.searchParams.set("domain", activeDomain);
   }
   const res = await fetch(url.toString(), { ...init, headers });
@@ -137,23 +149,23 @@ export const apiClient = {
 };
 
 export const streamUrl = () => {
-  const { token, activeDomain, source } = getTokenContext();
+  const { token, activeDomain } = getTokenContext();
   const url = new URL("/events/stream", API_BASE);
   if (token) {
     url.searchParams.set("token", token);
   }
-  if (source === "admin" && !url.searchParams.has("domain")) {
+  if (!url.searchParams.has("domain")) {
     url.searchParams.set("domain", activeDomain);
   }
   return url.toString();
 };
 export const runStreamUrl = (runId: string) => {
-  const { token, activeDomain, source } = getTokenContext();
+  const { token, activeDomain } = getTokenContext();
   const url = new URL(`/runs/${runId}/stream`, API_BASE);
   if (token) {
     url.searchParams.set("token", token);
   }
-  if (source === "admin" && !url.searchParams.has("domain")) {
+  if (!url.searchParams.has("domain")) {
     url.searchParams.set("domain", activeDomain);
   }
   return url.toString();

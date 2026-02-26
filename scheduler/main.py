@@ -21,6 +21,7 @@ from .mongo_client import get_db
 
 
 log = setup_logging("scheduler.main")
+DEFAULT_ADMIN_TOKEN = "admin_secret"
 
 app = FastAPI(title="hydra-jobs scheduler")
 app.middleware("http")(enforce_api_key)
@@ -76,9 +77,9 @@ def _ensure_admin_token():
     from . import utils
     admin_token = os.getenv("ADMIN_TOKEN")
     if not admin_token:
-        admin_token = secrets.token_hex(24)
+        admin_token = DEFAULT_ADMIN_TOKEN
         os.environ["ADMIN_TOKEN"] = admin_token
-        log.warning("Generated ADMIN_TOKEN: %s", admin_token)
+        log.warning("ADMIN_TOKEN not set; using default ADMIN_TOKEN. Set ADMIN_TOKEN in production.")
     # update auth module variable for consistency
     try:
         from .utils import auth

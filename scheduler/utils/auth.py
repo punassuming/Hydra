@@ -1,5 +1,6 @@
 import os
 import hashlib
+import hmac
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from ..mongo_client import get_db
@@ -11,7 +12,7 @@ ADMIN_DOMAIN = os.getenv("ADMIN_DOMAIN", "admin")
 
 
 def _is_allowed_path(path: str) -> bool:
-    return path.startswith("/health") or path.startswith("/events/stream")
+    return path.startswith("/health")
 
 
 def _extract_token(request: Request) -> str | None:
@@ -24,31 +25,48 @@ def _extract_token(request: Request) -> str | None:
     return None
 
 
+def _extract_domain(request: Request) -> str | None:
+    header_domain = (request.headers.get("x-domain") or "").strip()
+    if header_domain:
+        return header_domain
+    query_domain = (request.query_params.get("domain") or "").strip()
+    if query_domain:
+        return query_domain
+    return None
+
+
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def _lookup_domain_by_token(token: str) -> tuple[str | None, str | None]:
-    """
-    Returns (domain, token_hash) if found, else (None, None)
-    """
-    h = _hash_token(token)
+def _get_domain_token_hash(domain: str) -> str | None:
     r = get_redis()
-    # try redis cache
-    dom = r.get(f"token_hash:{h}:domain")
-    if dom:
-        return dom, h
+    cached = r.get(f"token_hash:{domain}")
+    if cached:
+        return cached
     db = get_db()
-    doc = db.domains.find_one({"token_hash": h})
+    doc = db.domains.find_one({"domain": domain})
     if doc:
-        domain = doc.get("domain")
-        r.setex(f"token_hash:{h}:domain", 300, domain)
-        return domain, h
-    return None, None
+        token_hash = doc.get("token_hash")
+        if token_hash:
+            r.set(f"token_hash:{domain}", token_hash)
+            r.set(f"token_hash:{token_hash}:domain", domain)
+            return token_hash
+    return None
 
 
-def _unauthorized_response() -> JSONResponse:
-    return JSONResponse(status_code=401, content={"detail": "unauthorized"})
+def _validate_domain_token(domain: str, token: str) -> str | None:
+    expected_hash = _get_domain_token_hash(domain)
+    if not expected_hash:
+        return None
+    provided_hash = _hash_token(token)
+    if hmac.compare_digest(expected_hash, provided_hash):
+        return provided_hash
+    return None
+
+
+def _unauthorized_response(detail: str = "unauthorized") -> JSONResponse:
+    return JSONResponse(status_code=401, content={"detail": detail})
 
 
 async def enforce_api_key(request: Request, call_next):
@@ -57,37 +75,29 @@ async def enforce_api_key(request: Request, call_next):
         return await call_next(request)
 
     token = _extract_token(request)
+    req_domain = _extract_domain(request)
     admin_token = ADMIN_TOKEN or os.getenv("ADMIN_TOKEN")
 
     # Admin token short-circuit (respect ?domain override for observation)
     if token == admin_token:
-        req_domain = request.query_params.get("domain") or ADMIN_DOMAIN
-        request.state.domain = req_domain
+        request.state.domain = req_domain or ADMIN_DOMAIN
         request.state.is_admin = True
         return await call_next(request)
 
     if _is_allowed_path(request.url.path):
-        # Allow unauthenticated health/event access; attach context only when a valid token is supplied.
-        if token:
-            if token == admin_token:
-                request.state.domain = request.query_params.get("domain") or ADMIN_DOMAIN
-                request.state.is_admin = True
-            else:
-                domain, token_hash = _lookup_domain_by_token(token)
-                if domain:
-                    request.state.domain = domain
-                    request.state.is_admin = False
-                    request.state.token_hash = token_hash
         return await call_next(request)
 
     if not token:
         return _unauthorized_response()
 
-    domain, token_hash = _lookup_domain_by_token(token)
-    if not domain:
+    if not req_domain:
+        return _unauthorized_response("domain required")
+
+    token_hash = _validate_domain_token(req_domain, token)
+    if not token_hash:
         return _unauthorized_response()
 
-    request.state.domain = domain
+    request.state.domain = req_domain
     request.state.is_admin = False
     request.state.token_hash = token_hash
     return await call_next(request)
