@@ -171,6 +171,23 @@ export function AdminPage() {
       <Typography.Text type="secondary">
         Requires admin token. Manage domains and their metadata; update tokens and switch the UI session token when needed.
       </Typography.Text>
+      <Card title="Worker Auth & Setup">
+        <Space direction="vertical" style={{ width: "100%" }} size={6}>
+          <Typography.Text>
+            Worker authentication is a pair: <Typography.Text code>domain + token</Typography.Text>. Do not combine them into a single string.
+          </Typography.Text>
+          <Typography.Text>
+            1) Create or rotate a domain token in this page. 2) Start worker with that domain + token.
+          </Typography.Text>
+          <Typography.Paragraph style={{ marginBottom: 0 }}>
+            <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
+{`WORKER_DOMAIN=${activeDomain} API_TOKEN=<domain_token> \\
+REDIS_URL=redis://localhost:6379/0 MONGO_URL=mongodb://localhost:27017 \\
+docker compose -f docker-compose.worker.yml up --build`}
+            </pre>
+          </Typography.Paragraph>
+        </Space>
+      </Card>
       <Card title="Create Domain">
         <Form
           layout="vertical"

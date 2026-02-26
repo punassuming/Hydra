@@ -70,6 +70,22 @@ export function StatusPage() {
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
+      <Card title="Worker Quick Start">
+        <Space direction="vertical" size={4}>
+          <Typography.Text>
+            Worker key is <Typography.Text code>domain + token</Typography.Text> (two separate values), not a single <Typography.Text code>domain:token</Typography.Text> string.
+          </Typography.Text>
+          <Typography.Paragraph style={{ marginBottom: 0 }}>
+            <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
+{`WORKER_DOMAIN=${domain} API_TOKEN=<domain_token> \\
+docker compose -f docker-compose.worker.yml up --build`}
+            </pre>
+          </Typography.Paragraph>
+          <Typography.Text type="secondary">
+            Get the domain token from Admin page by creating/rotating token for the domain.
+          </Typography.Text>
+        </Space>
+      </Card>
       <Card
         title="Status"
         extra={<Typography.Text type="secondary">Status aggregates run health; jump to Jobs for configuration or Workers for placement.</Typography.Text>}
