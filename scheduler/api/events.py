@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from sse_starlette.sse import EventSourceResponse
 
 from ..event_bus import event_bus
@@ -11,7 +11,7 @@ router = APIRouter()
 
 
 @router.get("/events/stream")
-async def event_stream(request):
+async def event_stream(request: Request):
     identifier, q = event_bus.subscribe()
     req_domain = getattr(request.state, "domain", None)
     is_admin = getattr(request.state, "is_admin", False)
