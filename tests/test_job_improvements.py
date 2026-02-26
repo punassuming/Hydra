@@ -235,3 +235,87 @@ def test_encrypt_produces_different_tokens():
         assert t1 != t2
     finally:
         os.environ.pop("ADMIN_TOKEN", None)
+
+
+# --- Credential resolution at dispatch tests ---
+
+
+def test_resolve_credential_refs_with_connection_uri():
+    """credential_ref is resolved to connection_uri from encrypted payload."""
+    import os
+    from scheduler.scheduler import _resolve_credential_refs
+    os.environ["ADMIN_TOKEN"] = "test-admin-token"
+    try:
+        encrypted = encrypt_payload({"connection_uri": "postgresql://user:pass@host/db"})
+
+        class FakeDB:
+            class credentials:
+                @staticmethod
+                def find_one(query):
+                    if query.get("name") == "prod-db":
+                        return {"name": "prod-db", "encrypted_payload": encrypted}
+                    return None
+
+        job = {
+            "_id": "job1",
+            "executor": {"type": "sql", "dialect": "postgres", "query": "SELECT 1", "credential_ref": "prod-db"},
+        }
+        resolved = _resolve_credential_refs(job, FakeDB())
+        assert resolved["executor"]["connection_uri"] == "postgresql://user:pass@host/db"
+    finally:
+        os.environ.pop("ADMIN_TOKEN", None)
+
+
+def test_resolve_credential_refs_from_discrete_fields():
+    """credential_ref with host/user/password fields constructs a connection_uri."""
+    import os
+    from scheduler.scheduler import _resolve_credential_refs
+    os.environ["ADMIN_TOKEN"] = "test-admin-token"
+    try:
+        encrypted = encrypt_payload({
+            "username": "admin",
+            "password": "secret",
+            "host": "db.example.com",
+            "port": 5432,
+            "database": "mydb",
+        })
+
+        class FakeDB:
+            class credentials:
+                @staticmethod
+                def find_one(query):
+                    if query.get("name") == "prod-db":
+                        return {"name": "prod-db", "encrypted_payload": encrypted}
+                    return None
+
+        job = {
+            "_id": "job2",
+            "executor": {"type": "sql", "dialect": "postgres", "query": "SELECT 1", "credential_ref": "prod-db"},
+        }
+        resolved = _resolve_credential_refs(job, FakeDB())
+        assert "postgresql://admin:secret@db.example.com:5432/mydb" == resolved["executor"]["connection_uri"]
+    finally:
+        os.environ.pop("ADMIN_TOKEN", None)
+
+
+def test_resolve_credential_refs_skips_non_sql():
+    """Non-SQL executors are returned unchanged."""
+    from scheduler.scheduler import _resolve_credential_refs
+    job = {"_id": "job3", "executor": {"type": "shell", "script": "echo hi"}}
+    assert _resolve_credential_refs(job, None) is job
+
+
+def test_resolve_credential_refs_skips_inline_uri():
+    """Jobs with inline connection_uri are not overwritten."""
+    from scheduler.scheduler import _resolve_credential_refs
+    job = {
+        "_id": "job4",
+        "executor": {
+            "type": "sql",
+            "query": "SELECT 1",
+            "connection_uri": "existing://uri",
+            "credential_ref": "cred",
+        },
+    }
+    resolved = _resolve_credential_refs(job, None)
+    assert resolved["executor"]["connection_uri"] == "existing://uri"

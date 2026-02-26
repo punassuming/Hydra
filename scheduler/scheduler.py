@@ -18,6 +18,7 @@ from .utils.worker_ops import append_worker_op
 from .event_bus import event_bus
 from .models.job_definition import ScheduleConfig
 from .utils.schedule import advance_schedule
+from .utils.encryption import decrypt_payload
 
 
 log = setup_logging("scheduler")
@@ -31,6 +32,58 @@ def _json_ready(value):
     if isinstance(value, list):
         return [_json_ready(v) for v in value]
     return value
+
+
+def _resolve_credential_refs(job: dict, db) -> dict:
+    """If the job's executor uses credential_ref, resolve it to connection_uri.
+
+    This injects decrypted credentials into the job dict so the worker
+    (which is Redis-only and has no access to MongoDB) can connect.
+    The original job document in Mongo is never mutated.
+    """
+    executor = job.get("executor") or {}
+    if executor.get("type") != "sql":
+        return job
+    credential_ref = (executor.get("credential_ref") or "").strip()
+    if not credential_ref:
+        return job
+    # Already has inline connection_uri — nothing to resolve
+    if (executor.get("connection_uri") or "").strip():
+        return job
+    cred_doc = db.credentials.find_one({"name": credential_ref})
+    if not cred_doc:
+        log.warning("credential_ref '%s' not found for job %s", credential_ref, job.get("_id"))
+        return job
+    try:
+        decrypted = decrypt_payload(cred_doc["encrypted_payload"])
+    except Exception:
+        log.exception("Failed to decrypt credential '%s' for job %s", credential_ref, job.get("_id"))
+        return job
+    # Build connection_uri from decrypted payload
+    resolved_uri = decrypted.get("connection_uri") or ""
+    if not resolved_uri and decrypted.get("host"):
+        # Construct URI from discrete fields when connection_uri wasn't stored
+        dialect = executor.get("dialect", "postgres")
+        user = decrypted.get("username", "")
+        password = decrypted.get("password", "")
+        host = decrypted.get("host", "localhost")
+        port = decrypted.get("port", "")
+        database = decrypted.get("database") or executor.get("database", "")
+        auth = f"{user}:{password}@" if user else ""
+        port_part = f":{port}" if port else ""
+        db_part = f"/{database}" if database else ""
+        dialect_map = {
+            "postgres": "postgresql",
+            "mysql": "mysql+pymysql",
+            "mssql": "mssql+pyodbc",
+            "oracle": "oracle+cx_oracle",
+            "mongodb": "mongodb",
+        }
+        scheme = dialect_map.get(dialect, dialect)
+        resolved_uri = f"{scheme}://{auth}{host}{port_part}{db_part}"
+    if resolved_uri:
+        job = {**job, "executor": {**executor, "connection_uri": resolved_uri}}
+    return job
 
 
 def list_online_workers(ttl_seconds: int, domain: str, respect_capacity: bool = True) -> List[Dict]:
@@ -62,6 +115,7 @@ def list_online_workers(ttl_seconds: int, domain: str, respect_capacity: bool = 
             "subnet": data.get("subnet", ""),
             "deployment_type": data.get("deployment_type", ""),
             "state": data.get("state", "online"),
+            "capabilities": (data.get("capabilities", "") or "").split(",") if data.get("capabilities") else [],
         }
         # Only accept workers with available slots
         if worker["state"] != "online":
@@ -118,10 +172,11 @@ def scheduling_loop(stop_event: threading.Event):
                 time.sleep(1)
                 continue
             wid = worker["worker_id"]
+            dispatched_job = _resolve_credential_refs(job, db)
             envelope = {
                 "job_id": job_id,
                 "domain": domain,
-                "job": _json_ready(job),
+                "job": _json_ready(dispatched_job),
                 "enqueued_ts": enqueued_ts,
                 "dispatch_ts": time.time(),
                 "enqueue_reason": enqueue_reason,
