@@ -23,6 +23,8 @@ from .mongo_client import get_db
 log = setup_logging("scheduler.main")
 
 app = FastAPI(title="hydra-jobs scheduler")
+app.middleware("http")(enforce_api_key)
+
 cors_env = os.getenv("CORS_ALLOW_ORIGINS", "*")
 allow_origins = [origin.strip() for origin in cors_env.split(",") if origin.strip() and origin.strip() != "*"]
 allow_all = "*" in [o.strip() for o in cors_env.split(",")]
@@ -42,7 +44,6 @@ app.include_router(history_router)
 app.include_router(logs_router)
 app.include_router(admin_router)
 app.include_router(ai_router)
-app.middleware("http")(enforce_api_key)
 
 stop_event = threading.Event()
 

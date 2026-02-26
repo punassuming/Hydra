@@ -1,6 +1,7 @@
 import os
 import hashlib
-from fastapi import Request, HTTPException
+from fastapi import Request
+from fastapi.responses import JSONResponse
 from ..mongo_client import get_db
 from ..redis_client import get_redis
 
@@ -46,6 +47,10 @@ def _lookup_domain_by_token(token: str) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _unauthorized_response() -> JSONResponse:
+    return JSONResponse(status_code=401, content={"detail": "unauthorized"})
+
+
 async def enforce_api_key(request: Request, call_next):
     # Allow CORS preflight without auth
     if request.method.upper() == "OPTIONS":
@@ -76,11 +81,11 @@ async def enforce_api_key(request: Request, call_next):
         return await call_next(request)
 
     if not token:
-        raise HTTPException(status_code=401, detail="unauthorized")
+        return _unauthorized_response()
 
     domain, token_hash = _lookup_domain_by_token(token)
     if not domain:
-        raise HTTPException(status_code=401, detail="unauthorized")
+        return _unauthorized_response()
 
     request.state.domain = domain
     request.state.is_admin = False
