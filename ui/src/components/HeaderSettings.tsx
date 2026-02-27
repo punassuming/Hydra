@@ -103,11 +103,15 @@ export function HeaderSettings() {
           </Typography.Text>
           <Space direction="vertical" size={4}>
             <Typography.Text strong>Active domain</Typography.Text>
-            <Select
-              value={currentDomain}
-              options={effectiveDomainOptions.map((o) => ({ label: o.label, value: o.domain }))}
-              onChange={(domain) => setDomain(domain)}
-            />
+            {adminToken ? (
+              <Select
+                value={currentDomain}
+                options={effectiveDomainOptions.map((o) => ({ label: o.label, value: o.domain }))}
+                onChange={(domain) => setDomain(domain)}
+              />
+            ) : (
+              <Typography.Text>{currentDomain}</Typography.Text>
+            )}
             <Tag color={hasTokenForDomain(currentDomain) ? "green" : "volcano"}>
               {hasTokenForDomain(currentDomain) ? "Domain token saved" : "No domain token saved"}
             </Tag>
@@ -239,10 +243,15 @@ export function HeaderSettings() {
         title={`Domain Token${tokenModal.domain ? ` - ${tokenModal.domain}` : ""}`}
       >
         <Space direction="vertical" style={{ width: "100%" }}>
-          <Typography.Text strong>Copy this token for UI login and workers:</Typography.Text>
-          <Typography.Paragraph copyable={{ text: tokenModal.token ?? "" }} style={{ marginBottom: 0 }}>
-            <Typography.Text code>{tokenModal.token ?? "-"}</Typography.Text>
-          </Typography.Paragraph>
+          <Typography.Text strong>Copy this token for UI login and workers. It will not be shown again.</Typography.Text>
+          <Input.Password
+            readOnly
+            value={tokenModal.token ?? ""}
+            style={{ fontFamily: "monospace" }}
+          />
+          <Button onClick={() => { navigator.clipboard.writeText(tokenModal.token ?? ""); message.success("Token copied to clipboard"); }}>
+            Copy Token
+          </Button>
           <Typography.Text type="secondary">Worker start example:</Typography.Text>
           <Typography.Paragraph style={{ marginBottom: 0 }}>
             <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>

@@ -33,3 +33,47 @@ export const rotateDomainWorkerRedisAcl = (domain: string) =>
 export const deleteDomain = (domain: string) => apiClient.delete(`/admin/domains/${domain}`);
 export const fetchTemplates = () => apiClient.get<{ templates: any[] }>("/admin/job_templates");
 export const importTemplate = (templateId: string) => apiClient.post(`/admin/job_templates/${templateId}/import`, {});
+
+// --- Credential Management (admin) ---
+
+export interface CredentialRef {
+  name: string;
+  domain: string;
+  credential_type: string;
+  dialect?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CredentialPayload {
+  name: string;
+  credential_type: "database" | "api_key" | "generic";
+  dialect?: string;
+  connection_uri?: string;
+  username?: string;
+  password?: string;
+  host?: string;
+  port?: number;
+  database?: string;
+  extra?: Record<string, unknown>;
+}
+
+export const fetchCredentials = (domain?: string) => {
+  const params = domain ? `?domain=${encodeURIComponent(domain)}` : "";
+  return apiClient.get<{ credentials: CredentialRef[] }>(`/admin/credentials${params}`);
+};
+
+export const createCredential = (payload: CredentialPayload, domain?: string) => {
+  const params = domain ? `?domain=${encodeURIComponent(domain)}` : "";
+  return apiClient.post<{ ok: boolean; name: string; domain: string }>(`/admin/credentials${params}`, payload);
+};
+
+export const updateCredential = (name: string, payload: CredentialPayload, domain?: string) => {
+  const params = domain ? `?domain=${encodeURIComponent(domain)}` : "";
+  return apiClient.put<{ ok: boolean; name: string; domain: string }>(`/admin/credentials/${name}${params}`, payload);
+};
+
+export const deleteCredential = (name: string, domain?: string) => {
+  const params = domain ? `?domain=${encodeURIComponent(domain)}` : "";
+  return apiClient.delete(`/admin/credentials/${name}${params}`);
+};

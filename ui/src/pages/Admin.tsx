@@ -11,6 +11,12 @@ import {
   importTemplate,
   deleteDomain,
   WorkerRedisAclInfo,
+  fetchCredentials,
+  createCredential,
+  updateCredential,
+  deleteCredential,
+  CredentialRef,
+  CredentialPayload,
 } from "../api/admin";
 import { setTokenForDomain, getEffectiveToken, withTempToken, hasTokenForDomain, getAdminToken } from "../api/client";
 import { createJob } from "../api/jobs";
@@ -113,6 +119,44 @@ export function AdminPage() {
   const [selectedSample, setSelectedSample] = useState<string | undefined>(undefined);
   const templatesQuery = useQuery({ queryKey: ["templates"], queryFn: fetchTemplates, staleTime: 10000 });
   const adminToken = getAdminToken();
+
+  // --- Credential management state ---
+  const [credDomain, setCredDomain] = useState<string>(activeDomain);
+  useEffect(() => setCredDomain(activeDomain), [activeDomain]);
+  const credentialsQuery = useQuery({
+    queryKey: ["credentials", credDomain],
+    queryFn: () => fetchCredentials(credDomain),
+    refetchInterval: 10000,
+  });
+  const [credFormVisible, setCredFormVisible] = useState(false);
+  const [editingCred, setEditingCred] = useState<string | null>(null);
+
+  const createCredMut = useMutation({
+    mutationFn: (payload: CredentialPayload) => createCredential(payload, credDomain),
+    onSuccess: () => {
+      message.success("Credential created");
+      queryClient.invalidateQueries({ queryKey: ["credentials", credDomain] });
+      setCredFormVisible(false);
+    },
+    onError: (err: Error) => message.error(err.message),
+  });
+  const updateCredMut = useMutation({
+    mutationFn: ({ name, payload }: { name: string; payload: CredentialPayload }) => updateCredential(name, payload, credDomain),
+    onSuccess: () => {
+      message.success("Credential updated");
+      queryClient.invalidateQueries({ queryKey: ["credentials", credDomain] });
+      setEditingCred(null);
+    },
+    onError: (err: Error) => message.error(err.message),
+  });
+  const deleteCredMut = useMutation({
+    mutationFn: (name: string) => deleteCredential(name, credDomain),
+    onSuccess: () => {
+      message.success("Credential deleted");
+      queryClient.invalidateQueries({ queryKey: ["credentials", credDomain] });
+    },
+    onError: (err: Error) => message.error(err.message),
+  });
 
   const createMut = useMutation({
     mutationFn: createDomain,
@@ -256,6 +300,159 @@ docker compose -f docker-compose.worker.yml up --build`}
           size="small"
         />
       </Card>
+      <Card title={`Credentials (domain: ${credDomain})`}>
+        <Space direction="vertical" style={{ width: "100%" }}>
+          <Typography.Text type="secondary">
+            Manage encrypted credentials for this domain. Secrets are write-only — you can create or update them, but the stored values are never displayed.
+          </Typography.Text>
+          <Select
+            style={{ minWidth: 200 }}
+            placeholder="Select domain for credentials"
+            options={domainsQuery.data?.domains?.map((d) => ({ label: d.domain, value: d.domain })) ?? []}
+            value={credDomain}
+            onChange={(val) => setCredDomain(val)}
+          />
+          <Table
+            dataSource={(credentialsQuery.data?.credentials ?? []).map((c) => ({ ...c, key: c.name }))}
+            loading={credentialsQuery.isLoading}
+            columns={[
+              { title: "Name", dataIndex: "name", key: "name" },
+              { title: "Type", dataIndex: "credential_type", key: "credential_type" },
+              { title: "Dialect", dataIndex: "dialect", key: "dialect" },
+              { title: "Updated", dataIndex: "updated_at", key: "updated_at" },
+              {
+                title: "Actions",
+                key: "actions",
+                render: (_: unknown, record: CredentialRef) => (
+                  <Space>
+                    <Button size="small" onClick={() => setEditingCred(record.name)}>
+                      Update Secret
+                    </Button>
+                    <Button size="small" danger onClick={() => deleteCredMut.mutate(record.name)}>
+                      Delete
+                    </Button>
+                  </Space>
+                ),
+              },
+            ]}
+            pagination={false}
+            size="small"
+          />
+          <Button type="primary" onClick={() => setCredFormVisible(true)}>
+            Add Credential
+          </Button>
+        </Space>
+      </Card>
+      <Modal
+        open={credFormVisible}
+        title="Add Credential"
+        onCancel={() => setCredFormVisible(false)}
+        footer={null}
+      >
+        <Form
+          layout="vertical"
+          onFinish={(values) => {
+            createCredMut.mutate(values as CredentialPayload);
+          }}
+        >
+          <Form.Item name="name" label="Name" rules={[{ required: true }]}>
+            <Input placeholder="prod-db" />
+          </Form.Item>
+          <Form.Item name="credential_type" label="Type" initialValue="database">
+            <Select options={[
+              { label: "Database", value: "database" },
+              { label: "API Key", value: "api_key" },
+              { label: "Generic", value: "generic" },
+            ]} />
+          </Form.Item>
+          <Form.Item name="dialect" label="Dialect">
+            <Select allowClear placeholder="Select dialect" options={[
+              { label: "PostgreSQL", value: "postgres" },
+              { label: "MySQL", value: "mysql" },
+              { label: "MSSQL", value: "mssql" },
+              { label: "Oracle", value: "oracle" },
+              { label: "MongoDB", value: "mongodb" },
+            ]} />
+          </Form.Item>
+          <Form.Item name="connection_uri" label="Connection URI">
+            <Input.Password placeholder="postgresql://user:pass@host/db" />
+          </Form.Item>
+          <Form.Item name="username" label="Username">
+            <Input placeholder="db_user" />
+          </Form.Item>
+          <Form.Item name="password" label="Password">
+            <Input.Password placeholder="Password" />
+          </Form.Item>
+          <Form.Item name="host" label="Host">
+            <Input placeholder="db.example.com" />
+          </Form.Item>
+          <Form.Item name="port" label="Port">
+            <Input type="number" placeholder="5432" />
+          </Form.Item>
+          <Form.Item name="database" label="Database">
+            <Input placeholder="mydb" />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" loading={createCredMut.isPending}>
+            Create
+          </Button>
+        </Form>
+      </Modal>
+      <Modal
+        open={editingCred !== null}
+        title={`Update Credential: ${editingCred}`}
+        onCancel={() => setEditingCred(null)}
+        footer={null}
+      >
+        <Typography.Text type="secondary" style={{ display: "block", marginBottom: 12 }}>
+          Provide updated values. All secret fields will be re-encrypted. Previously stored values are not shown.
+        </Typography.Text>
+        <Form
+          layout="vertical"
+          onFinish={(values) => {
+            if (editingCred) {
+              updateCredMut.mutate({ name: editingCred, payload: { ...values, name: editingCred } as CredentialPayload });
+            }
+          }}
+        >
+          <Form.Item name="credential_type" label="Type" initialValue="database">
+            <Select options={[
+              { label: "Database", value: "database" },
+              { label: "API Key", value: "api_key" },
+              { label: "Generic", value: "generic" },
+            ]} />
+          </Form.Item>
+          <Form.Item name="dialect" label="Dialect">
+            <Select allowClear placeholder="Select dialect" options={[
+              { label: "PostgreSQL", value: "postgres" },
+              { label: "MySQL", value: "mysql" },
+              { label: "MSSQL", value: "mssql" },
+              { label: "Oracle", value: "oracle" },
+              { label: "MongoDB", value: "mongodb" },
+            ]} />
+          </Form.Item>
+          <Form.Item name="connection_uri" label="Connection URI">
+            <Input.Password placeholder="postgresql://user:pass@host/db" />
+          </Form.Item>
+          <Form.Item name="username" label="Username">
+            <Input placeholder="db_user" />
+          </Form.Item>
+          <Form.Item name="password" label="Password">
+            <Input.Password placeholder="New password" />
+          </Form.Item>
+          <Form.Item name="host" label="Host">
+            <Input placeholder="db.example.com" />
+          </Form.Item>
+          <Form.Item name="port" label="Port">
+            <Input type="number" placeholder="5432" />
+          </Form.Item>
+          <Form.Item name="database" label="Database">
+            <Input placeholder="mydb" />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" loading={updateCredMut.isPending}>
+            Update
+          </Button>
+        </Form>
+      </Modal>
       <Card title={`Import Jobs (active domain: ${importDomain})`}>
         <Space direction="vertical" style={{ width: "100%" }}>
           <Typography.Text type="secondary">Paste a job JSON (single object or array) or use the sample set.</Typography.Text>
@@ -437,8 +634,15 @@ docker compose -f docker-compose.worker.yml up --build`}
         title={`Domain Token – ${tokenModal.domain}`}
       >
         <Space direction="vertical" style={{ width: "100%" }}>
-          <Typography.Text strong>Copy this token for workers and client access:</Typography.Text>
-          <Typography.Paragraph code>{tokenModal.token ?? "(no token provided)"}</Typography.Paragraph>
+          <Typography.Text strong>Copy this token for workers and client access. It will not be shown again.</Typography.Text>
+          <Input.Password
+            readOnly
+            value={tokenModal.token ?? ""}
+            style={{ fontFamily: "monospace" }}
+          />
+          <Button onClick={() => { navigator.clipboard.writeText(tokenModal.token ?? ""); message.success("Token copied"); }}>
+            Copy Token
+          </Button>
         </Space>
       </Modal>
       <Modal
@@ -448,13 +652,19 @@ docker compose -f docker-compose.worker.yml up --build`}
         title={`Worker Redis ACL${redisAclModal.domain ? ` – ${redisAclModal.domain}` : ""}`}
       >
         <Space direction="vertical" style={{ width: "100%" }}>
-          <Typography.Text strong>Use these for workers in this domain:</Typography.Text>
+          <Typography.Text strong>Use these for workers in this domain. Credentials will not be shown again.</Typography.Text>
           <Typography.Paragraph style={{ marginBottom: 0 }}>
             <Typography.Text code>REDIS_USERNAME={redisAclModal.acl?.username ?? "-"}</Typography.Text>
           </Typography.Paragraph>
-          <Typography.Paragraph copyable={{ text: redisAclModal.acl?.password ?? "" }} style={{ marginBottom: 0 }}>
-            <Typography.Text code>REDIS_PASSWORD={redisAclModal.acl?.password ?? "-"}</Typography.Text>
-          </Typography.Paragraph>
+          <Input.Password
+            readOnly
+            value={redisAclModal.acl?.password ?? ""}
+            addonBefore="REDIS_PASSWORD"
+            style={{ fontFamily: "monospace" }}
+          />
+          <Button onClick={() => { navigator.clipboard.writeText(redisAclModal.acl?.password ?? ""); message.success("Password copied"); }}>
+            Copy Password
+          </Button>
           <Typography.Text type="secondary">Worker startup example:</Typography.Text>
           <Typography.Paragraph style={{ marginBottom: 0 }}>
             <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>

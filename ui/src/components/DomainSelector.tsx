@@ -23,6 +23,21 @@ export function DomainSelector({ onChange }: { onChange?: (domain: string) => vo
     onChange?.(fallback);
   }, [availableDomains, current, onChange, setDomain]);
 
+  // Non-admin users see only their current domain label, no switching
+  if (!adminToken) {
+    return (
+      <Space>
+        <Space direction="vertical" size={0}>
+          <Typography.Text style={{ color: colors.textSecondary }}>Active Domain</Typography.Text>
+          <Tag color={hasTokenForDomain(current) ? "green" : "volcano"} style={{ marginTop: 2 }}>
+            {hasTokenForDomain(current) ? "Token saved" : "No token"}
+          </Tag>
+        </Space>
+        <Typography.Text strong>{current}</Typography.Text>
+      </Space>
+    );
+  }
+
   return (
     <Space>
       <Space direction="vertical" size={0}>
@@ -45,18 +60,16 @@ export function DomainSelector({ onChange }: { onChange?: (domain: string) => vo
       <Button size="small" onClick={() => setSwitchModal({ open: true, domain: current })}>
         Switch Token
       </Button>
-      {adminToken && (
-        <Button
-          size="small"
-          onClick={() => {
-            setTokenForDomain(current, adminToken);
-            storeDomain(current);
-            setDomain(current);
-          }}
-        >
-          Use Admin
-        </Button>
-      )}
+      <Button
+        size="small"
+        onClick={() => {
+          setTokenForDomain(current, adminToken);
+          storeDomain(current);
+          setDomain(current);
+        }}
+      >
+        Use Admin
+      </Button>
       <Typography.Link
         onClick={() => {
           forgetToken(current);
@@ -77,7 +90,7 @@ export function DomainSelector({ onChange }: { onChange?: (domain: string) => vo
           }
         }}
       >
-        <Input
+        <Input.Password
           placeholder="Token"
           value={switchModal.token}
           onChange={(e) => setSwitchModal((prev) => ({ ...prev, token: e.target.value }))}
