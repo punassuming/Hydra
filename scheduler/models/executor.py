@@ -44,10 +44,32 @@ class BatchExecutor(ExecutorBase):
     shell: str = "cmd"
 
 
+class PowerShellExecutor(ExecutorBase):
+    type: Literal["powershell"] = "powershell"
+    script: str
+    shell: str = "pwsh"
+
+
+class SqlExecutor(ExecutorBase):
+    type: Literal["sql"] = "sql"
+    dialect: Literal["postgres", "mysql", "mssql", "oracle", "mongodb"] = "postgres"
+    connection_uri: Optional[str] = None
+    credential_ref: Optional[str] = None
+    query: str
+    database: Optional[str] = None
+
+
 class ExternalExecutor(ExecutorBase):
     type: Literal["external"] = "external"
     command: str
 
 
-ExecutorUnion = Union[PythonExecutor, ShellExecutor, BatchExecutor, ExternalExecutor]
+ExecutorUnion = Union[
+    PythonExecutor,
+    ShellExecutor,
+    BatchExecutor,
+    PowerShellExecutor,
+    SqlExecutor,
+    ExternalExecutor,
+]
 ExecutorConfig = Annotated[ExecutorUnion, Field(discriminator="type")]

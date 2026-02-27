@@ -5,6 +5,7 @@ export interface Affinity {
   hostnames?: string[];
   subnets?: string[];
   deployment_types?: string[];
+  executor_types?: string[];
 }
 
 export type Executor =
@@ -33,6 +34,29 @@ export type Executor =
       type: "batch";
       script: string;
       shell?: string;
+      args?: string[];
+      env?: Record<string, string>;
+      workdir?: string | null;
+      impersonate_user?: string | null;
+      kerberos?: KerberosConfig | null;
+    }
+  | {
+      type: "powershell";
+      script: string;
+      shell?: string;
+      args?: string[];
+      env?: Record<string, string>;
+      workdir?: string | null;
+      impersonate_user?: string | null;
+      kerberos?: KerberosConfig | null;
+    }
+  | {
+      type: "sql";
+      dialect?: string;
+      connection_uri?: string;
+      credential_ref?: string;
+      query: string;
+      database?: string;
       args?: string[];
       env?: Record<string, string>;
       workdir?: string | null;
@@ -213,6 +237,8 @@ export interface WorkerInfo {
   cpu_count?: number;
   python_version?: string;
   cwd?: string;
+  shells?: string[];
+  capabilities?: string[];
   process_count?: number;
   memory_rss_mb?: number;
   load_1m?: number;

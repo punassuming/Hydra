@@ -14,6 +14,7 @@ class Affinity(BaseModel):
     hostnames: List[str] = Field(default_factory=list)
     subnets: List[str] = Field(default_factory=list)
     deployment_types: List[str] = Field(default_factory=list)
+    executor_types: List[str] = Field(default_factory=list)
 
 
 class ScheduleConfig(BaseModel):

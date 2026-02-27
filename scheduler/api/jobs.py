@@ -89,16 +89,24 @@ def _validate_job_definition(job: JobDefinition) -> JobValidationResult:
             errors.append(
                 "environment.venv_path can only be set when environment.type == 'venv'"
             )
-    elif exec_type in {"shell", "batch"}:
+    elif exec_type in {"shell", "batch", "powershell"}:
         script = getattr(executor, "script", "")
         if not script.strip():
             errors.append(f"{exec_type} executor requires non-empty script")
+    elif exec_type == "sql":
+        query = getattr(executor, "query", "")
+        if not query.strip():
+            errors.append("sql executor requires a non-empty query")
+        connection_uri = getattr(executor, "connection_uri", None) or ""
+        credential_ref = getattr(executor, "credential_ref", None) or ""
+        if not connection_uri.strip() and not credential_ref.strip():
+            errors.append("sql executor requires connection_uri or credential_ref")
     elif exec_type == "external":
         command = getattr(executor, "command", "")
         if not command.strip():
             errors.append("external executor requires a command or binary path")
     else:
-        errors.append("executor.type must be one of python|shell|batch|external")
+        errors.append("executor.type must be one of python|shell|batch|powershell|sql|external")
 
     try:
         next_run_at = initialize_schedule(job.schedule, datetime.utcnow()).next_run_at
