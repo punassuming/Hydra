@@ -40,6 +40,8 @@ def _resolve_credential_refs(job: dict, db) -> dict:
     This injects decrypted credentials into the job dict so the worker
     (which is Redis-only and has no access to MongoDB) can connect.
     The original job document in Mongo is never mutated.
+    Credentials are domain-scoped: only credentials belonging to the
+    same domain as the job are resolved.
     """
     executor = job.get("executor") or {}
     if executor.get("type") != "sql":
@@ -50,9 +52,10 @@ def _resolve_credential_refs(job: dict, db) -> dict:
     # Already has inline connection_uri — nothing to resolve
     if (executor.get("connection_uri") or "").strip():
         return job
-    cred_doc = db.credentials.find_one({"name": credential_ref})
+    job_domain = job.get("domain", "prod")
+    cred_doc = db.credentials.find_one({"name": credential_ref, "domain": job_domain})
     if not cred_doc:
-        log.warning("credential_ref '%s' not found for job %s", credential_ref, job.get("_id"))
+        log.warning("credential_ref '%s' not found for job %s in domain %s", credential_ref, job.get("_id"), job_domain)
         return job
     try:
         decrypted = decrypt_payload(cred_doc["encrypted_payload"])
