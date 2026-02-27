@@ -18,6 +18,13 @@ def _require_admin(request: Request):
         raise HTTPException(status_code=403, detail="admin only")
 
 
+def _credential_domain(request: Request) -> str:
+    """Resolve the effective domain for credential operations."""
+    domain = getattr(request.state, "domain", "prod")
+    force_domain = (request.query_params.get("domain") or "").strip()
+    return force_domain or domain
+
+
 @router.get("/domains")
 def list_domains(request: Request) -> Dict[str, List[Dict]]:
     _require_admin(request)
@@ -184,9 +191,7 @@ def list_credentials(request: Request) -> Dict:
 @router.post("/credentials")
 def create_credential(payload: CredentialCreate, request: Request):
     _require_admin(request)
-    domain = getattr(request.state, "domain", "prod")
-    force_domain = (request.query_params.get("domain") or "").strip()
-    cred_domain = force_domain or domain
+    cred_domain = _credential_domain(request)
     db = get_db()
     existing = db.credentials.find_one({"name": payload.name, "domain": cred_domain})
     if existing:
@@ -211,9 +216,7 @@ def create_credential(payload: CredentialCreate, request: Request):
 @router.put("/credentials/{name}")
 def update_credential(name: str, payload: CredentialCreate, request: Request):
     _require_admin(request)
-    domain = getattr(request.state, "domain", "prod")
-    force_domain = (request.query_params.get("domain") or "").strip()
-    cred_domain = force_domain or domain
+    cred_domain = _credential_domain(request)
     db = get_db()
     existing = db.credentials.find_one({"name": name, "domain": cred_domain})
     if not existing:
@@ -236,9 +239,7 @@ def update_credential(name: str, payload: CredentialCreate, request: Request):
 @router.delete("/credentials/{name}")
 def delete_credential(name: str, request: Request):
     _require_admin(request)
-    domain = getattr(request.state, "domain", "prod")
-    force_domain = (request.query_params.get("domain") or "").strip()
-    cred_domain = force_domain or domain
+    cred_domain = _credential_domain(request)
     db = get_db()
     result = db.credentials.delete_one({"name": name, "domain": cred_domain})
     if result.deleted_count == 0:

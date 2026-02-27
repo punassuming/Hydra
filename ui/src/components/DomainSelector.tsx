@@ -60,16 +60,18 @@ export function DomainSelector({ onChange }: { onChange?: (domain: string) => vo
       <Button size="small" onClick={() => setSwitchModal({ open: true, domain: current })}>
         Switch Token
       </Button>
-      <Button
-        size="small"
-        onClick={() => {
-          setTokenForDomain(current, adminToken);
-          storeDomain(current);
-          setDomain(current);
-        }}
-      >
-        Use Admin
-      </Button>
+      {adminToken && (
+        <Button
+          size="small"
+          onClick={() => {
+            setTokenForDomain(current, adminToken);
+            storeDomain(current);
+            setDomain(current);
+          }}
+        >
+          Use Admin
+        </Button>
+      )}
       <Typography.Link
         onClick={() => {
           forgetToken(current);
@@ -91,7 +93,7 @@ export function DomainSelector({ onChange }: { onChange?: (domain: string) => vo
         }}
       >
         <Input.Password
-          placeholder="Token"
+          placeholder="Enter domain token"
           value={switchModal.token}
           onChange={(e) => setSwitchModal((prev) => ({ ...prev, token: e.target.value }))}
         />

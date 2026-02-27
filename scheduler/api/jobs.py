@@ -20,13 +20,15 @@ from ..utils.schedule import initialize_schedule
 
 router = APIRouter()
 
+MASKED_SECRET = "********"
+
 
 def _sanitize_job_response(job: JobDefinition) -> dict:
     """Strip sensitive fields (e.g. connection_uri) from job responses."""
     data = job.model_dump(by_alias=True)
     executor = data.get("executor") or {}
     if executor.get("type") == "sql" and "connection_uri" in executor:
-        executor["connection_uri"] = "********" if executor["connection_uri"] else None
+        executor["connection_uri"] = MASKED_SECRET if executor["connection_uri"] else None
     return data
 
 

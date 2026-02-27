@@ -3,7 +3,7 @@ import os
 import pytest
 from scheduler.utils.encryption import encrypt_payload, decrypt_payload
 from scheduler.models.credentials import CredentialCreate, CredentialReference
-from scheduler.api.jobs import _sanitize_job_response
+from scheduler.api.jobs import _sanitize_job_response, MASKED_SECRET
 from scheduler.models.job_definition import JobDefinition, Affinity
 from scheduler.models.executor import ShellExecutor, SqlExecutor
 
@@ -35,9 +35,7 @@ def test_credential_ref_cross_domain_blocked():
             "executor": {"type": "sql", "dialect": "postgres", "query": "SELECT 1", "credential_ref": "shared-cred"},
         }
         resolved = _resolve_credential_refs(job, FakeDB())
-        assert "connection_uri" not in resolved.get("executor", {}), (
-            "Credential from another domain should not be resolved"
-        )
+        assert "connection_uri" not in resolved.get("executor", {}), "Credential from another domain should not be resolved"
     finally:
         os.environ.pop("ADMIN_TOKEN", None)
 
@@ -103,7 +101,7 @@ def test_sanitize_job_response_masks_connection_uri():
         ),
     )
     sanitized = _sanitize_job_response(job)
-    assert sanitized["executor"]["connection_uri"] == "********"
+    assert sanitized["executor"]["connection_uri"] == MASKED_SECRET
 
 
 def test_sanitize_job_response_no_op_for_shell():
