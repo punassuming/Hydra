@@ -145,6 +145,7 @@ Located in `scripts/`:
 
 *   Uses `vitest` for testing.
 *   Run tests: `cd ui && npm test`
+*   Cypress integration tests: `cd ui && npm run cypress:open` or `cd ui && npm run cypress:run` (expects UI running on `http://localhost:5173`)
 
 ## Configuration Notes
 

@@ -184,6 +184,9 @@ UI Worker Detail includes an operational timeline panel.
   - `uvicorn scheduler.main:app --reload --host 0.0.0.0 --port 8000`
 - UI local:
   - `cd ui && npm install && npm run dev`
+  - Cypress e2e:
+    - `cd ui && npm run cypress:open` (interactive)
+    - `cd ui && npm run cypress:run` (headless, expects UI at `http://localhost:5173`)
 - Helpful docs/scripts:
   - `doc/docker-compose-workflows.md`
   - `doc/testing.md`
