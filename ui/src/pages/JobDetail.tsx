@@ -34,7 +34,7 @@ export function JobDetailPage() {
 
   const parseParams = (text: string): Record<string, string> => {
     const result: Record<string, string> = {};
-    text.split("\n").forEach((line) => {
+    text.split("\n").filter((line) => line.trim()).forEach((line) => {
       const [k, ...rest] = line.split("=");
       if (k?.trim() && rest.length) result[k.trim()] = rest.join("=").trim();
     });

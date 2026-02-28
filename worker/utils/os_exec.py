@@ -2,6 +2,7 @@ import os
 import platform
 import subprocess
 import threading
+import time
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 
@@ -63,8 +64,7 @@ def _run_with_callbacks(
         kill_event.wait()
         try:
             proc.terminate()
-            import time as _time
-            _time.sleep(2)
+            time.sleep(2)
             if proc.poll() is None:
                 proc.kill()
         except Exception:

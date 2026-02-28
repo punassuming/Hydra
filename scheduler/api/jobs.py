@@ -73,7 +73,7 @@ def _enqueue_job(job_id: str, reason: str, extra_payload: dict | None = None, pr
     meta_mapping: dict = {"enqueued_ts": time.time(), "reason": reason}
     if params:
         meta_mapping["params"] = json.dumps(params)
-    if retry_attempt:
+    if retry_attempt > 0:
         meta_mapping["retry_attempt"] = str(retry_attempt)
     r.hset(f"job_enqueue_meta:{domain}:{job_id}", mapping=meta_mapping)
     r.expire(f"job_enqueue_meta:{domain}:{job_id}", 24 * 3600)

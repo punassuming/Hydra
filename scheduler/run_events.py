@@ -12,6 +12,8 @@ from .utils.worker_ops import append_worker_op
 
 
 log = setup_logging("scheduler.run_events")
+# Maximum length of error_message sent in webhook payloads
+_WEBHOOK_MAX_ERROR_LEN = 2000
 
 
 def _to_datetime(value: Any) -> datetime | None:
@@ -243,7 +245,7 @@ def _handle_run_end(payload: Dict[str, Any]):
                 # Terminal failure — fire webhooks
                 webhooks = job_doc.get("on_failure_webhooks") or []
                 stderr_text = payload.get("stderr", "") or payload.get("completion_reason", "")
-                _fire_webhooks_async(webhooks, job_id, run_id, stderr_text[:2000])
+                _fire_webhooks_async(webhooks, job_id, run_id, stderr_text[:_WEBHOOK_MAX_ERROR_LEN])
 
 
 def _handle_event(payload: Dict[str, Any]):

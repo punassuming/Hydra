@@ -128,7 +128,8 @@ def worker_main():
             for msg in pubsub.listen():
                 if msg.get("type") != "message":
                     continue
-                run_id = (msg.get("data") or "").strip()
+                raw = msg.get("data") or b""
+                run_id = (raw.decode("utf-8") if isinstance(raw, bytes) else raw).strip()
                 if not run_id:
                     continue
                 with active_kill_lock:
