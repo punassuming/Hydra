@@ -7,11 +7,13 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "vitest"
+    "test": "vitest",
+    "cypress:open": "cypress open",
+    "cypress:run": "cypress run"
   },
   "dependencies": {
-    "@tanstack/react-query": "^5.24.7",
     "@ant-design/icons": "^5.2.6",
+    "@tanstack/react-query": "^5.24.7",
     "antd": "^5.19.3",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
@@ -19,12 +21,13 @@
     "zod": "^3.22.4"
   },
   "devDependencies": {
-    "@types/react": "^18.2.25",
     "@testing-library/jest-dom": "^6.2.0",
     "@testing-library/react": "^14.1.2",
     "@testing-library/user-event": "^14.5.2",
+    "@types/react": "^18.2.25",
     "@types/react-dom": "^18.2.11",
     "@vitejs/plugin-react": "^4.2.0",
+    "cypress": "^13.17.0",
     "jsdom": "^24.0.0",
     "typescript": "^5.4.0",
     "vite": "^5.0.10",
