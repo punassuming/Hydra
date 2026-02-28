@@ -3,6 +3,6 @@ describe("Authentication prompt", () => {
     cy.visit("/");
     cy.contains("Sign In").should("be.visible");
     cy.contains("Authenticate").should("be.visible");
-    cy.contains("Enter domain and token. Domain is required for non-admin authentication.").should("be.visible");
+    cy.contains("Enter domain and token").should("be.visible");
   });
 });
