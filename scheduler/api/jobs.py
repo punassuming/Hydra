@@ -20,6 +20,17 @@ from ..utils.schedule import initialize_schedule
 
 router = APIRouter()
 
+MASKED_SECRET = "********"
+
+
+def _sanitize_job_response(job: JobDefinition) -> dict:
+    """Strip sensitive fields (e.g. connection_uri) from job responses."""
+    data = job.model_dump(by_alias=True)
+    executor = data.get("executor") or {}
+    if executor.get("type") == "sql" and "connection_uri" in executor:
+        executor["connection_uri"] = MASKED_SECRET if executor["connection_uri"] else None
+    return data
+
 
 def _fetch_job_runs(job_id: str, domain_filter: str | None = None) -> List[Dict[str, Any]]:
     db = get_db()
@@ -132,7 +143,7 @@ def _attach_schedule(job_def: JobDefinition, force: bool = False) -> JobDefiniti
     return job_def.copy(update={"schedule": new_schedule})
 
 
-@router.get("/jobs/", response_model=List[JobDefinition])
+@router.get("/jobs/")
 def list_jobs(request: Request):
     db = get_db()
     domain = getattr(request.state, "domain", "prod")
@@ -162,7 +173,7 @@ def list_jobs(request: Request):
             query["tags"] = {"$in": tags}
     
     docs = list(db.job_definitions.find(query).sort("created_at", -1))
-    return [JobDefinition.model_validate(doc) for doc in docs]
+    return [_sanitize_job_response(JobDefinition.model_validate(doc)) for doc in docs]
 
 
 @router.post("/jobs/", response_model=JobDefinition)
@@ -194,10 +205,10 @@ def submit_job(job: JobCreate, request: Request):
             ),
         },
     )
-    return job_def
+    return _sanitize_job_response(job_def)
 
 
-@router.get("/jobs/{job_id}", response_model=JobDefinition)
+@router.get("/jobs/{job_id}")
 def get_job(job_id: str, request: Request):
     db = get_db()
     doc = db.job_definitions.find_one({"_id": job_id})
@@ -207,7 +218,7 @@ def get_job(job_id: str, request: Request):
     is_admin = getattr(request.state, "is_admin", False)
     if not is_admin and doc.get("domain", "prod") != domain:
         raise HTTPException(status_code=403, detail="forbidden")
-    return JobDefinition.model_validate(doc)
+    return _sanitize_job_response(JobDefinition.model_validate(doc))
 
 
 @router.get("/jobs/{job_id}/runs", response_model=List[JobRun])
@@ -248,7 +259,7 @@ def update_job(job_id: str, updates: JobUpdate, request: Request):
     job_def = _attach_schedule(job_def, force="schedule" in update_doc)
     db.job_definitions.replace_one({"_id": job_id}, job_def.to_mongo())
     event_bus.publish("job_updated", {"job_id": job_id, "domain": job_def.domain})
-    return job_def
+    return _sanitize_job_response(job_def)
 
 
 @router.post("/jobs/{job_id}/validate", response_model=JobValidationResult)
@@ -305,7 +316,7 @@ def run_adhoc_job(job: JobCreate, request: Request):
     job_def = _attach_schedule(job_def, force=True)
     db.job_definitions.insert_one(job_def.to_mongo())
     _enqueue_job(job_def.id, reason="adhoc_run", priority=job_def.priority, domain=domain)
-    return job_def
+    return _sanitize_job_response(job_def)
 
 
 @router.get("/overview/jobs")

@@ -252,12 +252,13 @@ def test_resolve_credential_refs_with_connection_uri():
             class credentials:
                 @staticmethod
                 def find_one(query):
-                    if query.get("name") == "prod-db":
-                        return {"name": "prod-db", "encrypted_payload": encrypted}
+                    if query.get("name") == "prod-db" and query.get("domain") == "prod":
+                        return {"name": "prod-db", "domain": "prod", "encrypted_payload": encrypted}
                     return None
 
         job = {
             "_id": "job1",
+            "domain": "prod",
             "executor": {"type": "sql", "dialect": "postgres", "query": "SELECT 1", "credential_ref": "prod-db"},
         }
         resolved = _resolve_credential_refs(job, FakeDB())
@@ -284,12 +285,13 @@ def test_resolve_credential_refs_from_discrete_fields():
             class credentials:
                 @staticmethod
                 def find_one(query):
-                    if query.get("name") == "prod-db":
-                        return {"name": "prod-db", "encrypted_payload": encrypted}
+                    if query.get("name") == "prod-db" and query.get("domain") == "prod":
+                        return {"name": "prod-db", "domain": "prod", "encrypted_payload": encrypted}
                     return None
 
         job = {
             "_id": "job2",
+            "domain": "prod",
             "executor": {"type": "sql", "dialect": "postgres", "query": "SELECT 1", "credential_ref": "prod-db"},
         }
         resolved = _resolve_credential_refs(job, FakeDB())

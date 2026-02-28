@@ -8,7 +8,7 @@ from ..mongo_client import get_db
 from ..examples.templates import TEMPLATES
 from ..utils.redis_acl import ensure_worker_acl_user, delete_worker_acl_user, worker_acl_username
 from ..models.credentials import CredentialCreate, CredentialReference
-from ..utils.encryption import encrypt_payload, decrypt_payload
+from ..utils.encryption import encrypt_payload
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -16,6 +16,13 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 def _require_admin(request: Request):
     if not getattr(request.state, "is_admin", False):
         raise HTTPException(status_code=403, detail="admin only")
+
+
+def _credential_domain(request: Request) -> str:
+    """Resolve the effective domain for credential operations."""
+    domain = getattr(request.state, "domain", "prod")
+    force_domain = (request.query_params.get("domain") or "").strip()
+    return force_domain or domain
 
 
 @router.get("/domains")
@@ -165,11 +172,14 @@ def import_template(template_id: str, request: Request):
 def list_credentials(request: Request) -> Dict:
     _require_admin(request)
     db = get_db()
-    docs = list(db.credentials.find({}))
+    force_domain = (request.query_params.get("domain") or "").strip()
+    query = {"domain": force_domain} if force_domain else {}
+    docs = list(db.credentials.find(query))
     refs = []
     for doc in docs:
         refs.append(CredentialReference(
             name=doc.get("name", ""),
+            domain=doc.get("domain", "prod"),
             credential_type=doc.get("credential_type", "database"),
             dialect=doc.get("dialect"),
             created_at=doc.get("created_at"),
@@ -181,16 +191,18 @@ def list_credentials(request: Request) -> Dict:
 @router.post("/credentials")
 def create_credential(payload: CredentialCreate, request: Request):
     _require_admin(request)
+    cred_domain = _credential_domain(request)
     db = get_db()
-    existing = db.credentials.find_one({"name": payload.name})
+    existing = db.credentials.find_one({"name": payload.name, "domain": cred_domain})
     if existing:
-        raise HTTPException(status_code=409, detail="credential with that name already exists")
+        raise HTTPException(status_code=409, detail="credential with that name already exists in this domain")
     sensitive = payload.model_dump(exclude={"name", "credential_type", "dialect"})
     encrypted = encrypt_payload(sensitive)
     now = datetime.utcnow().isoformat()
     doc = {
-        "_id": payload.name,
+        "_id": f"{cred_domain}:{payload.name}",
         "name": payload.name,
+        "domain": cred_domain,
         "credential_type": payload.credential_type,
         "dialect": payload.dialect,
         "encrypted_payload": encrypted,
@@ -198,21 +210,22 @@ def create_credential(payload: CredentialCreate, request: Request):
         "updated_at": now,
     }
     db.credentials.insert_one(doc)
-    return {"ok": True, "name": payload.name}
+    return {"ok": True, "name": payload.name, "domain": cred_domain}
 
 
 @router.put("/credentials/{name}")
 def update_credential(name: str, payload: CredentialCreate, request: Request):
     _require_admin(request)
+    cred_domain = _credential_domain(request)
     db = get_db()
-    existing = db.credentials.find_one({"name": name})
+    existing = db.credentials.find_one({"name": name, "domain": cred_domain})
     if not existing:
         raise HTTPException(status_code=404, detail="credential not found")
     sensitive = payload.model_dump(exclude={"name", "credential_type", "dialect"})
     encrypted = encrypt_payload(sensitive)
     now = datetime.utcnow().isoformat()
     db.credentials.update_one(
-        {"name": name},
+        {"name": name, "domain": cred_domain},
         {"$set": {
             "credential_type": payload.credential_type,
             "dialect": payload.dialect,
@@ -220,29 +233,15 @@ def update_credential(name: str, payload: CredentialCreate, request: Request):
             "updated_at": now,
         }},
     )
-    return {"ok": True, "name": name}
+    return {"ok": True, "name": name, "domain": cred_domain}
 
 
 @router.delete("/credentials/{name}")
 def delete_credential(name: str, request: Request):
     _require_admin(request)
+    cred_domain = _credential_domain(request)
     db = get_db()
-    result = db.credentials.delete_one({"name": name})
+    result = db.credentials.delete_one({"name": name, "domain": cred_domain})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="credential not found")
     return {"ok": True}
-
-
-@router.get("/credentials/{name}/resolve")
-def resolve_credential(name: str, request: Request):
-    """Decrypt and return credential payload. Admin only."""
-    _require_admin(request)
-    db = get_db()
-    doc = db.credentials.find_one({"name": name})
-    if not doc:
-        raise HTTPException(status_code=404, detail="credential not found")
-    try:
-        decrypted = decrypt_payload(doc["encrypted_payload"])
-    except Exception:
-        raise HTTPException(status_code=500, detail="decryption failed; check encryption key configuration")
-    return {"name": name, "credential_type": doc.get("credential_type"), **decrypted}

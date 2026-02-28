@@ -13,7 +13,7 @@ import { AdminPage } from "./pages/Admin";
 import { HydraLogo } from "./components/HydraLogo";
 import { HeaderSettings } from "./components/HeaderSettings";
 import { AuthPrompt } from "./components/AuthPrompt";
-import { AUTH_REQUIRED_EVENT, hasAnyToken } from "./api/client";
+import { AUTH_REQUIRED_EVENT, hasAnyToken, getAdminToken } from "./api/client";
 import { WorkerDetailPage } from "./pages/WorkerDetail";
 import { ActiveDomainProvider, useActiveDomain } from "./context/ActiveDomainContext";
 import { ThemeProvider, useTheme } from "./theme";
@@ -35,16 +35,22 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
     window.addEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
     return () => window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
   }, []);
+  const isAdmin = Boolean(getAdminToken());
   const navItems = useMemo(
-    () => [
-      { value: "jobs", label: "Jobs", path: "/" },
-      { value: "browse", label: "Browse", path: "/browse" },
-      { value: "workers", label: "Workers", path: "/workers" },
-      { value: "status", label: "Status", path: "/status" },
-      { value: "history", label: "History", path: "/history" },
-      { value: "admin", label: "Admin", path: "/admin" },
-    ],
-    [],
+    () => {
+      const items = [
+        { value: "jobs", label: "Jobs", path: "/" },
+        { value: "browse", label: "Browse", path: "/browse" },
+        { value: "workers", label: "Workers", path: "/workers" },
+        { value: "status", label: "Status", path: "/status" },
+        { value: "history", label: "History", path: "/history" },
+      ];
+      if (isAdmin) {
+        items.push({ value: "admin", label: "Admin", path: "/admin" });
+      }
+      return items;
+    },
+    [isAdmin],
   );
   const currentNav = useMemo(() => {
     if (location.pathname.startsWith("/browse")) return "browse";
@@ -156,9 +162,11 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
                 >
                   {darkMode ? "Light" : "Dark"}
                 </Button>
-                <Button icon={<SettingOutlined />} type={location.pathname.startsWith("/admin") ? "primary" : "default"} onClick={() => navigate("/admin")}>
-                  Admin
-                </Button>
+                {isAdmin && (
+                  <Button icon={<SettingOutlined />} type={location.pathname.startsWith("/admin") ? "primary" : "default"} onClick={() => navigate("/admin")}>
+                    Admin
+                  </Button>
+                )}
                 <HeaderSettings />
               </Space>
             </Space>
@@ -183,7 +191,7 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
             <Route path="/workers/:workerId" element={<WorkerDetailPage />} />
             <Route
               path="/admin"
-              element={<AdminPage />}
+              element={isAdmin ? <AdminPage /> : <Typography.Text type="danger" style={{ padding: 24, display: "block" }}>Admin access requires an admin token. Use Settings to authenticate as admin.</Typography.Text>}
             />
             <Route path="/jobs/:jobId" element={<JobDetailPage />} />
           </Routes>

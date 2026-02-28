@@ -17,6 +17,7 @@ class CredentialCreate(BaseModel):
 
 class CredentialStored(BaseModel):
     name: str
+    domain: str = "prod"
     credential_type: str = "database"
     dialect: Optional[str] = None
     encrypted_payload: str
@@ -26,6 +27,7 @@ class CredentialStored(BaseModel):
 
 class CredentialReference(BaseModel):
     name: str
+    domain: str = "prod"
     credential_type: str
     dialect: Optional[str] = None
     created_at: Optional[str] = None
