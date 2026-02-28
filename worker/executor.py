@@ -139,6 +139,7 @@ def execute_job(
     job: dict,
     log_callback_out: Optional[Callable[[str], None]] = None,
     log_callback_err: Optional[Callable[[str], None]] = None,
+    kill_event: Optional[object] = None,
 ) -> Tuple[int, str, str]:
     executor = job.get("executor") or {}
     timeout = job.get("timeout", 0) or None
@@ -167,7 +168,10 @@ def execute_job(
     def _run_cmd(cmd: list[str]) -> Tuple[int, str, str]:
         if log_callback_out or log_callback_err:
             return _run_with_callbacks(
-                cmd, timeout, merged_env, workdir, on_stdout=log_callback_out, on_stderr=log_callback_err
+                cmd, timeout, merged_env, workdir,
+                on_stdout=log_callback_out,
+                on_stderr=log_callback_err,
+                kill_event=kill_event,
             )
         return run_external(binary=cmd[0], args=cmd[1:], timeout=timeout, env=merged_env, workdir=workdir)
 

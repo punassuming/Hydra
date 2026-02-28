@@ -16,7 +16,7 @@ import {
   Steps,
 } from "antd";
 import { JobDefinition, PythonEnvironment } from "../types";
-import { JobPayload, ValidationResult, fetchWorkers, generateJob } from "../api/jobs";
+import { JobPayload, ValidationResult, fetchWorkers, fetchJobs, generateJob } from "../api/jobs";
 import { useActiveDomain } from "../context/ActiveDomainContext";
 
 const defaultAffinity = {
@@ -80,6 +80,10 @@ const createDefaultPayload = (): JobPayload => ({
     stderr_not_contains: [],
   },
   tags: [],
+  depends_on: [],
+  max_retries: 0,
+  retry_delay_seconds: 0,
+  on_failure_webhooks: [],
 });
 
 interface Props {
@@ -117,6 +121,14 @@ export function JobForm({
     queryFn: fetchWorkers,
     staleTime: 5000,
   });
+
+  const jobsQuery = useQuery({
+    queryKey: ["jobs", domain],
+    queryFn: () => fetchJobs(),
+    staleTime: 30000,
+  });
+
+  const allJobs = jobsQuery.data ?? [];
 
   const workerHints = useMemo(() => {
     const workers = workersQuery.data ?? [];
@@ -189,6 +201,10 @@ export function JobForm({
         schedule: { ...createDefaultPayload().schedule, ...(selectedJob.schedule ?? {}) },
         completion: { ...createDefaultPayload().completion, ...(selectedJob.completion ?? {}) },
         tags: selectedJob.tags ?? [],
+        depends_on: selectedJob.depends_on ?? [],
+        max_retries: selectedJob.max_retries ?? 0,
+        retry_delay_seconds: selectedJob.retry_delay_seconds ?? 0,
+        on_failure_webhooks: selectedJob.on_failure_webhooks ?? [],
       });
     } else {
       setPayload(createDefaultPayload());
@@ -952,6 +968,53 @@ export function JobForm({
                 </Typography.Text>
               </Col>
             </Row>
+            <Divider orientation="left" plain>Advanced Retry &amp; Alerting</Divider>
+            <Row gutter={16}>
+              <Col xs={24} md={8}>
+                <Form.Item label="Max Scheduler Retries" tooltip="Scheduler-level retries after terminal failure (separate from worker retries above)">
+                  <InputNumber
+                    min={0}
+                    style={{ width: "100%" }}
+                    value={payload.max_retries ?? 0}
+                    onChange={(value) => updatePayload("max_retries", Number(value))}
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item label="Retry Delay (seconds)" tooltip="Seconds to wait before each scheduler retry">
+                  <InputNumber
+                    min={0}
+                    style={{ width: "100%" }}
+                    value={payload.retry_delay_seconds ?? 0}
+                    onChange={(value) => updatePayload("retry_delay_seconds", Number(value))}
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Form.Item label="Failure Webhook URLs (one per line)" tooltip="HTTP POST will be sent to these URLs on terminal failure">
+              <Input.TextArea
+                value={(payload.on_failure_webhooks ?? []).join("\n")}
+                onChange={(e) => updatePayload("on_failure_webhooks", parseList(e.target.value))}
+                placeholder="https://hooks.example.com/alert"
+                autoSize={{ minRows: 2 }}
+              />
+            </Form.Item>
+            <Divider orientation="left" plain>Job Dependencies</Divider>
+            <Form.Item label="Depends On" tooltip="This job will be triggered automatically when all listed jobs succeed">
+              <Select
+                mode="multiple"
+                style={{ width: "100%" }}
+                placeholder="Select prerequisite jobs..."
+                value={payload.depends_on ?? []}
+                onChange={(value) => updatePayload("depends_on", value)}
+                options={allJobs
+                  .filter((j) => j._id !== (selectedJob?._id))
+                  .map((j) => ({ label: `${j.name} (${j._id.slice(0, 8)})`, value: j._id }))}
+                filterOption={(input, option) =>
+                  (option?.label as string ?? "").toLowerCase().includes(input.toLowerCase())
+                }
+              />
+            </Form.Item>
           </>
         );
     }

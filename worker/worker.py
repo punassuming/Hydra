@@ -103,6 +103,9 @@ def worker_main():
 
     active_jobs = set()
     active_jobs_lock = threading.Lock()
+    # Maps run_id -> threading.Event; set to kill the running subprocess
+    active_kill_events: dict = {}
+    active_kill_lock = threading.Lock()
 
     def get_active_jobs():
         with active_jobs_lock:
@@ -115,6 +118,27 @@ def worker_main():
     def publish_run_event(event: dict):
         r.rpush(f"run_events:{domain}", json.dumps(event))
         r.expire(f"run_events:{domain}", 24 * 3600)
+
+    def _kill_listener():
+        """Subscribe to job_kill:{domain} and set the kill event for matching run_ids."""
+        sub_r = get_redis()
+        pubsub = sub_r.pubsub()
+        pubsub.subscribe(f"job_kill:{domain}")
+        try:
+            for msg in pubsub.listen():
+                if msg.get("type") != "message":
+                    continue
+                run_id = (msg.get("data") or "").strip()
+                if not run_id:
+                    continue
+                with active_kill_lock:
+                    evt = active_kill_events.get(run_id)
+                if evt is not None:
+                    evt.set()
+        except Exception:
+            pass
+
+    threading.Thread(target=_kill_listener, daemon=True).start()
 
     def run_job(envelope: dict, bypass_override: bool = False):
         job = envelope.get("job") or {}
@@ -129,6 +153,7 @@ def worker_main():
             add_active_job(worker_id, job_id)
             run_id = uuid.uuid4().hex
             retries_remaining = int(job.get("retries", 0))
+            retry_attempt = int(envelope.get("retry_attempt", 0))
             started_ts = time.time()
             enqueued_ts = envelope.get("enqueued_ts")
             try:
@@ -198,6 +223,21 @@ def worker_main():
                 r.expire(history_key, 3600)
                 r.expire(channel, 3600)
 
+            # Inject runtime params as environment variables
+            params = envelope.get("params") or {}
+            if params:
+                job = dict(job)
+                exec_dict = dict(job.get("executor") or {})
+                env_dict = dict(exec_dict.get("env") or {})
+                env_dict.update({k: str(v) for k, v in params.items()})
+                exec_dict["env"] = env_dict
+                job["executor"] = exec_dict
+
+            # Register kill event for this run
+            kill_event = threading.Event()
+            with active_kill_lock:
+                active_kill_events[run_id] = kill_event
+
             # Execute with retries
             attempts = int(job.get("retries", 0)) + 1
             rc = 1
@@ -211,6 +251,7 @@ def worker_main():
                     job,
                     log_callback_out=lambda text: stream_log("stdout", text),
                     log_callback_err=lambda text: stream_log("stderr", text),
+                    kill_event=kill_event,
                 )
                 attempts_used += 1
                 success, last_reason = evaluate_completion(job, rc, stdout, stderr)
@@ -235,6 +276,7 @@ def worker_main():
                     "end_ts": time.time(),
                     "slot": slot_position,
                     "retries_remaining": retries_remaining,
+                    "retry_attempt": retry_attempt,
                     "schedule_tick": (job.get("schedule") or {}).get("next_run_at"),
                     "schedule_mode": (job.get("schedule") or {}).get("mode", "immediate"),
                     "executor_type": (job.get("executor") or {}).get("type", "shell"),
@@ -260,6 +302,8 @@ def worker_main():
                 },
             )
         finally:
+            with active_kill_lock:
+                active_kill_events.pop(run_id, None)
             r.delete(f"job_running:{domain}:{job_id}")
             remove_active_job(worker_id, job_id)
             incr_running(worker_id, -1)

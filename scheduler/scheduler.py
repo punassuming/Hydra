@@ -152,6 +152,7 @@ def scheduling_loop(stop_event: threading.Event):
             meta = r.hgetall(meta_key) or {}
             enqueued_ts = float(meta.get("enqueued_ts", time.time()))
             enqueue_reason = meta.get("reason")
+            retry_attempt = int(meta.get("retry_attempt", 0))
             r.delete(meta_key)
             candidates = [
                 w
@@ -176,6 +177,8 @@ def scheduling_loop(stop_event: threading.Event):
                 continue
             wid = worker["worker_id"]
             dispatched_job = _resolve_credential_refs(job, db)
+            params_raw = meta.get("params")
+            params = json.loads(params_raw) if params_raw else {}
             envelope = {
                 "job_id": job_id,
                 "domain": domain,
@@ -183,6 +186,8 @@ def scheduling_loop(stop_event: threading.Event):
                 "enqueued_ts": enqueued_ts,
                 "dispatch_ts": time.time(),
                 "enqueue_reason": enqueue_reason,
+                "retry_attempt": retry_attempt,
+                "params": params,
             }
             r.rpush(f"job_queue:{domain}:{wid}", json.dumps(envelope))
             append_worker_op(
@@ -272,3 +277,35 @@ def schedule_trigger_loop(stop_event: threading.Event):
             log.exception("Error in schedule trigger loop: %s", exc)
             time.sleep(1)
         time.sleep(1)
+
+
+def timeout_enforcement_loop(stop_event: threading.Event):
+    r = get_redis()
+    db = get_db()
+    log.info("Timeout enforcement loop started")
+    while not stop_event.is_set():
+        try:
+            now = time.time()
+            domains = list(r.smembers("hydra:domains") or []) or ["prod"]
+            for domain in domains:
+                for key in r.scan_iter(f"job_running:{domain}:*"):
+                    data = r.hgetall(key) or {}
+                    job_id = key.split(":")[-1]
+                    run_id = data.get("run_id")
+                    if not run_id:
+                        continue
+                    started_ts = float(data.get("heartbeat", now))
+                    elapsed = now - started_ts
+                    job_doc = db.job_definitions.find_one({"_id": job_id}, {"timeout": 1})
+                    if not job_doc:
+                        continue
+                    job_timeout = int(job_doc.get("timeout", 0))
+                    if job_timeout > 0 and elapsed > job_timeout:
+                        log.warning(
+                            "Timeout exceeded for job %s run %s (%.1fs > %ss); sending kill signal",
+                            job_id, run_id, elapsed, job_timeout,
+                        )
+                        r.publish(f"job_kill:{domain}", run_id)
+        except Exception as exc:
+            log.exception("Error in timeout enforcement loop: %s", exc)
+        time.sleep(5)

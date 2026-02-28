@@ -31,6 +31,7 @@ def _run_with_callbacks(
     workdir: Optional[str],
     on_stdout: Optional[Callable[[str], None]] = None,
     on_stderr: Optional[Callable[[str], None]] = None,
+    kill_event: Optional["threading.Event"] = None,
 ) -> Tuple[int, str, str]:
     """
     Run a command, streaming stdout/stderr via callbacks while still returning full buffers.
@@ -56,6 +57,19 @@ def _run_with_callbacks(
                     pass
         pipe.close()
 
+    def _watch_kill():
+        if kill_event is None:
+            return
+        kill_event.wait()
+        try:
+            proc.terminate()
+            import time as _time
+            _time.sleep(2)
+            if proc.poll() is None:
+                proc.kill()
+        except Exception:
+            pass
+
     threads = []
     if proc.stdout:
         t_out = threading.Thread(target=_drain, args=(proc.stdout, stdout_lines, on_stdout), daemon=True)
@@ -65,6 +79,9 @@ def _run_with_callbacks(
         t_err = threading.Thread(target=_drain, args=(proc.stderr, stderr_lines, on_stderr), daemon=True)
         t_err.start()
         threads.append(t_err)
+    if kill_event is not None:
+        t_kill = threading.Thread(target=_watch_kill, daemon=True)
+        t_kill.start()
 
     try:
         proc.wait(timeout=timeout if timeout and timeout > 0 else None)

@@ -1,8 +1,10 @@
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+import json
 import time
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Body
+from pydantic import BaseModel
 
 from ..mongo_client import get_db
 from ..redis_client import get_redis
@@ -63,15 +65,17 @@ def _normalize_run_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
-def _enqueue_job(job_id: str, reason: str, extra_payload: dict | None = None, priority: int | None = None, domain: str = "prod"):
+def _enqueue_job(job_id: str, reason: str, extra_payload: dict | None = None, priority: int | None = None, domain: str = "prod", params: dict | None = None, retry_attempt: int = 0):
     r = get_redis()
     score = float(priority if priority is not None else 5)
     r.sadd("hydra:domains", domain)
     r.zadd(f"job_queue:{domain}:pending", {job_id: score})
-    r.hset(
-        f"job_enqueue_meta:{domain}:{job_id}",
-        mapping={"enqueued_ts": time.time(), "reason": reason},
-    )
+    meta_mapping: dict = {"enqueued_ts": time.time(), "reason": reason}
+    if params:
+        meta_mapping["params"] = json.dumps(params)
+    if retry_attempt:
+        meta_mapping["retry_attempt"] = str(retry_attempt)
+    r.hset(f"job_enqueue_meta:{domain}:{job_id}", mapping=meta_mapping)
     r.expire(f"job_enqueue_meta:{domain}:{job_id}", 24 * 3600)
     payload = {"job_id": job_id, "reason": reason, "priority": score, "domain": domain}
     if extra_payload:
@@ -285,8 +289,12 @@ def validate_payload(job: JobCreate, request: Request):
     return _validate_job_definition(job_def)
 
 
+class RunJobRequest(BaseModel):
+    params: Dict[str, str] = {}
+
+
 @router.post("/jobs/{job_id}/run")
-def run_job_now(job_id: str, request: Request):
+def run_job_now(job_id: str, request: Request, body: RunJobRequest = Body(default=RunJobRequest())):
     db = get_db()
     doc = db.job_definitions.find_one({"_id": job_id})
     if not doc:
@@ -296,9 +304,40 @@ def run_job_now(job_id: str, request: Request):
     if not is_admin and doc.get("domain", "prod") != domain:
         raise HTTPException(status_code=403, detail="forbidden")
     priority = doc.get("priority", 5)
-    _enqueue_job(job_id, reason="manual_run", priority=priority, domain=doc.get("domain", "prod"))
+    _enqueue_job(
+        job_id,
+        reason="manual_run",
+        priority=priority,
+        domain=doc.get("domain", "prod"),
+        params=body.params or None,
+    )
     event_bus.publish("job_manual_run", {"job_id": job_id, "domain": doc.get("domain", "prod")})
     return {"job_id": job_id, "queued": True}
+
+
+@router.post("/runs/{run_id}/kill")
+def kill_run(run_id: str, request: Request):
+    """Send a kill signal to a currently running job identified by its run_id."""
+    r = get_redis()
+    domain = getattr(request.state, "domain", "prod")
+    is_admin = getattr(request.state, "is_admin", False)
+    found = False
+    scan_domains = [domain] if not is_admin else list(r.smembers("hydra:domains") or [domain])
+    for d in scan_domains:
+        for key in r.scan_iter(f"job_running:{d}:*"):
+            data = r.hgetall(key) or {}
+            if data.get("run_id") == run_id:
+                # Check domain auth
+                if not is_admin and data.get("domain", "prod") != domain:
+                    continue
+                r.publish(f"job_kill:{d}", run_id)
+                found = True
+                break
+        if found:
+            break
+    if not found:
+        raise HTTPException(status_code=404, detail="run not found or not currently running")
+    return {"run_id": run_id, "signal": "kill_sent"}
 
 
 @router.post("/jobs/adhoc", response_model=JobDefinition)

@@ -1,6 +1,7 @@
 import json
 import threading
 import time
+import urllib.request
 from datetime import datetime
 from typing import Any, Dict
 
@@ -31,6 +32,75 @@ def _to_datetime(value: Any) -> datetime | None:
         except Exception:
             return None
     return None
+
+
+def _enqueue_job_for_retry(job_id: str, domain: str, priority: int, retry_attempt: int, delay_seconds: int = 0):
+    """Re-enqueue a failed job for a scheduler-level retry, with optional delay."""
+    def _do():
+        if delay_seconds > 0:
+            time.sleep(delay_seconds)
+        r = get_redis()
+        r.zadd(f"job_queue:{domain}:pending", {job_id: float(priority)})
+        r.hset(
+            f"job_enqueue_meta:{domain}:{job_id}",
+            mapping={
+                "enqueued_ts": time.time(),
+                "reason": f"scheduler_retry_{retry_attempt}",
+                "retry_attempt": str(retry_attempt),
+            },
+        )
+        r.expire(f"job_enqueue_meta:{domain}:{job_id}", 24 * 3600)
+        log.info("Requeued job %s for retry attempt %s (delay=%ss)", job_id, retry_attempt, delay_seconds)
+
+    t = threading.Thread(target=_do, daemon=True)
+    t.start()
+
+
+def _trigger_dependents(job_id: str, domain: str, db):
+    """Enqueue any jobs whose depends_on includes the just-completed job_id."""
+    dependents = list(db.job_definitions.find(
+        {"domain": domain, "depends_on": job_id, "schedule.enabled": True}
+    ))
+    if not dependents:
+        return
+    r = get_redis()
+    for dep_job in dependents:
+        dep_id = dep_job["_id"]
+        priority = int(dep_job.get("priority", 5))
+        r.zadd(f"job_queue:{domain}:pending", {dep_id: float(priority)})
+        r.hset(
+            f"job_enqueue_meta:{domain}:{dep_id}",
+            mapping={"enqueued_ts": time.time(), "reason": f"dependency_of_{job_id}"},
+        )
+        r.expire(f"job_enqueue_meta:{domain}:{dep_id}", 24 * 3600)
+        log.info("Triggered dependent job %s because %s succeeded", dep_id, job_id)
+
+
+def _fire_webhooks(webhooks: list, job_id: str, run_id: str, error_message: str):
+    """Fire HTTP POST to each webhook URL with failure details."""
+    payload = json.dumps({
+        "job_id": job_id,
+        "run_id": run_id,
+        "error_message": error_message,
+    }).encode()
+    for url in webhooks:
+        try:
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=5)
+        except Exception as exc:
+            log.warning("Webhook POST failed for %s: %s", url, exc)
+
+
+def _fire_webhooks_async(webhooks: list, job_id: str, run_id: str, error_message: str):
+    if not webhooks:
+        return
+    t = threading.Thread(target=_fire_webhooks, args=(webhooks, job_id, run_id, error_message), daemon=True)
+    t.start()
 
 
 def _handle_run_start(payload: Dict[str, Any]):
@@ -94,9 +164,10 @@ def _handle_run_end(payload: Dict[str, Any]):
     existing = db.job_runs.find_one({"_id": run_id}, {"start_ts": 1})
     start_ts = _to_datetime((existing or {}).get("start_ts")) or _to_datetime(payload.get("start_ts"))
     duration = (end_ts - start_ts).total_seconds() if start_ts else None
+    status = payload.get("status", "failed")
     update_doc = {
         "end_ts": end_ts,
-        "status": payload.get("status", "failed"),
+        "status": status,
         "returncode": payload.get("returncode"),
         "stdout": payload.get("stdout", ""),
         "stderr": payload.get("stderr", ""),
@@ -130,22 +201,49 @@ def _handle_run_end(payload: Dict[str, Any]):
 
     worker_id = payload.get("worker_id")
     domain = payload.get("domain", "prod")
+    job_id = payload.get("job_id", "")
+
     if worker_id:
         append_worker_op(
             domain=domain,
             worker_id=worker_id,
             op_type="run_end",
-            message=f"Finished job {payload.get('job_id', '')} ({payload.get('status', 'failed')})",
+            message=f"Finished job {job_id} ({status})",
             details={
                 "run_id": run_id,
-                "job_id": payload.get("job_id"),
-                "status": payload.get("status", "failed"),
+                "job_id": job_id,
+                "status": status,
                 "returncode": payload.get("returncode"),
                 "duration": duration,
                 "completion_reason": payload.get("completion_reason"),
             },
             ts=end_ts.timestamp(),
         )
+
+    # --- Post-run actions ---
+    if status == "success":
+        # Trigger any dependent jobs
+        _trigger_dependents(job_id, domain, db)
+    elif status == "failed":
+        # Check for scheduler-level retries
+        job_doc = db.job_definitions.find_one({"_id": job_id}, {"max_retries": 1, "retry_delay_seconds": 1, "priority": 1, "on_failure_webhooks": 1})
+        if job_doc:
+            max_retries = int(job_doc.get("max_retries", 0))
+            retry_delay = int(job_doc.get("retry_delay_seconds", 0))
+            retry_attempt = int(payload.get("retry_attempt", 0))
+            if max_retries > 0 and retry_attempt < max_retries:
+                _enqueue_job_for_retry(
+                    job_id=job_id,
+                    domain=domain,
+                    priority=int(job_doc.get("priority", 5)),
+                    retry_attempt=retry_attempt + 1,
+                    delay_seconds=retry_delay,
+                )
+            else:
+                # Terminal failure — fire webhooks
+                webhooks = job_doc.get("on_failure_webhooks") or []
+                stderr_text = payload.get("stderr", "") or payload.get("completion_reason", "")
+                _fire_webhooks_async(webhooks, job_id, run_id, stderr_text[:2000])
 
 
 def _handle_event(payload: Dict[str, Any]):

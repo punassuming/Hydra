@@ -120,6 +120,10 @@ export interface JobDefinition {
   schedule: ScheduleConfig;
   completion: CompletionCriteria;
   tags: string[];
+  depends_on?: string[];
+  max_retries?: number;
+  retry_delay_seconds?: number;
+  on_failure_webhooks?: string[];
   created_at: string;
   updated_at: string;
 }
