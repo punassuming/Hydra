@@ -22,6 +22,19 @@ Hydra Jobs is a distributed job runner with:
 - Mongo stores durable data:
   - `domains`, `job_definitions`, `job_runs`
 
+## Adopting Additional Control-Plane Ideas (No Architecture Change)
+
+- Job scheduling/orchestration
+  - Already supported: cron + interval schedules, inline executors (python/shell/batch/powershell), git source execution, retries/timeouts, and `depends_on` metadata for DAG relationships.
+  - Incremental adoption path: use existing `depends_on` to power a UI DAG editor; enforce dependency gating in scheduler dispatch logic as a follow-up.
+- Domain isolation
+  - Already supported through domain-scoped tokens, Redis ACL credentials, and domain-partitioned queues/keys.
+- Real-time observability
+  - Already supported through SSE log streaming (`/runs/{run_id}/stream`) and worker metrics/timeline/operations endpoints.
+- AI ops
+  - Already supported: AI job generation and failure analysis endpoints.
+  - Added: `/ai/predict_duration` estimates expected run duration from historical Mongo `job_runs` for predictive planning.
+
 ## Security Model
 
 - Non-admin API access requires both:
@@ -132,6 +145,10 @@ UI Worker Detail includes an operational timeline panel.
   - `GET /jobs/{job_id}/runs`
   - `GET /runs/{run_id}`
   - `GET /runs/{run_id}/stream` (SSE)
+- AI:
+  - `POST /ai/generate_job`
+  - `POST /ai/analyze_run`
+  - `POST /ai/predict_duration`
 - Workers:
   - `GET /workers/`
   - `GET /workers/{id}/metrics`

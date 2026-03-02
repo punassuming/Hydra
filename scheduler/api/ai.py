@@ -2,11 +2,12 @@ import os
 import json
 from enum import Enum
 from typing import Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 import google.generativeai as genai
 import openai
 from ..models.job_definition import JobCreate
+from ..mongo_client import get_db
 
 router = APIRouter(prefix="/ai", tags=["AI"])
 
@@ -35,6 +36,11 @@ class AnalyzeRequest(BaseModel):
     question: Optional[str] = None
     provider: AIProvider = AIProvider.GEMINI
     model: Optional[str] = None
+
+class PredictDurationRequest(BaseModel):
+    job_id: str
+    sample_size: int = 20
+    domain: Optional[str] = None
 
 SYSTEM_PROMPT_JOB = """
 You are an expert job scheduler assistant. Convert the user's natural language request into a JSON object matching the following structure (JobCreate).
@@ -196,3 +202,53 @@ Provide a concise summary of the error and 1-3 specific steps to fix it.
         raise HTTPException(status_code=400, detail="Invalid provider")
         
     return {"analysis": text}
+
+
+def _percentile(sorted_values, p: float) -> Optional[float]:
+    if not sorted_values:
+        return None
+    if len(sorted_values) == 1:
+        return float(sorted_values[0])
+    idx = (len(sorted_values) - 1) * p
+    lower = int(idx)
+    upper = min(lower + 1, len(sorted_values) - 1)
+    fraction = idx - lower
+    return float(sorted_values[lower] + (sorted_values[upper] - sorted_values[lower]) * fraction)
+
+
+@router.post("/predict_duration")
+async def predict_duration(req: PredictDurationRequest, request: Request):
+    db = get_db()
+    sample_size = max(1, min(req.sample_size, 200))
+    domain = getattr(request.state, "domain", "prod")
+    is_admin = getattr(request.state, "is_admin", False)
+
+    query = {
+        "job_id": req.job_id,
+        "status": {"$in": ["success", "failed"]},
+        "duration": {"$ne": None},
+    }
+    if not is_admin:
+        query["domain"] = domain
+    elif req.domain:
+        query["domain"] = req.domain
+
+    runs = list(db.job_runs.find(query).sort("start_ts", -1).limit(sample_size))
+    durations = sorted(
+        float(run["duration"])
+        for run in runs
+        if isinstance(run.get("duration"), (int, float)) and run.get("duration") is not None and run.get("duration") >= 0
+    )
+    if not durations:
+        return {"job_id": req.job_id, "sample_size": 0, "estimated_duration_seconds": None, "p90_duration_seconds": None}
+
+    mean_seconds = sum(durations) / len(durations)
+    median_seconds = _percentile(durations, 0.5)
+    p90_seconds = _percentile(durations, 0.9)
+    return {
+        "job_id": req.job_id,
+        "sample_size": len(durations),
+        "estimated_duration_seconds": median_seconds,
+        "mean_duration_seconds": mean_seconds,
+        "p90_duration_seconds": p90_seconds,
+    }
