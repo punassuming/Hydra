@@ -8,13 +8,15 @@ def fetch_copy_source(src: str, dest: str) -> None:
 
     If *src* is a file, the file is copied into *dest* (preserving the
     filename).  If *src* is a directory, the entire tree is copied into
-    *dest*.  Raises FileNotFoundError when *src* does not exist.
+    *dest*.
 
-    Security note: *src* is resolved from the job definition and is
-    therefore operator-controlled.  The worker process must have read
-    access to the path.  Restrict worker file-system permissions
-    appropriately to limit access to sensitive paths.
+    *src* must be an absolute path.
+
+    Raises ValueError when *src* is not absolute.
+    Raises FileNotFoundError when *src* does not exist.
     """
+    if not os.path.isabs(src):
+        raise ValueError(f"Copy source path must be absolute, got: {src!r}")
     if not os.path.exists(src):
         raise FileNotFoundError(f"Copy source path not found: {src}")
 

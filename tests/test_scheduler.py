@@ -161,3 +161,11 @@ def test_job_definition_with_source():
     assert job.source is not None
     assert job.source.url == "https://github.com/user/repo.git"
     assert job.source.path == "jobs"
+
+
+def test_source_config_copy_protocol():
+    from scheduler.models.job_definition import SourceConfig
+    s = SourceConfig(protocol="copy", url="/opt/jobs/my-project")
+    assert s.protocol == "copy"
+    assert s.url == "/opt/jobs/my-project"
+    assert s.credential_ref is None  # not needed for local copies

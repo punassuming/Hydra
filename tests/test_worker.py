@@ -126,3 +126,47 @@ def test_git_token_injection_empty_token():
     url = "https://github.com/user/repo.git"
     result = _inject_token_into_url(url, "")
     assert result == url
+
+
+def test_copy_source_directory():
+    import tempfile, os
+    from worker.utils.copy import fetch_copy_source
+    with tempfile.TemporaryDirectory() as src_dir:
+        open(os.path.join(src_dir, "run.sh"), "w").write("echo hello")
+        sub = os.path.join(src_dir, "subdir")
+        os.makedirs(sub)
+        open(os.path.join(sub, "data.txt"), "w").write("data")
+        with tempfile.TemporaryDirectory() as dest_dir:
+            fetch_copy_source(src_dir, dest_dir)
+            assert os.path.isfile(os.path.join(dest_dir, "run.sh"))
+            assert os.path.isfile(os.path.join(dest_dir, "subdir", "data.txt"))
+
+
+def test_copy_source_single_file():
+    import tempfile, os
+    from worker.utils.copy import fetch_copy_source
+    with tempfile.NamedTemporaryFile(suffix=".sh", delete=False) as f:
+        f.write(b"echo hi")
+        src_file = f.name
+    try:
+        with tempfile.TemporaryDirectory() as dest_dir:
+            fetch_copy_source(src_file, dest_dir)
+            assert os.path.isfile(os.path.join(dest_dir, os.path.basename(src_file)))
+    finally:
+        os.unlink(src_file)
+
+
+def test_copy_source_missing_raises():
+    import tempfile, pytest
+    from worker.utils.copy import fetch_copy_source
+    with tempfile.TemporaryDirectory() as dest_dir:
+        with pytest.raises(FileNotFoundError):
+            fetch_copy_source("/nonexistent/path/that/does/not/exist", dest_dir)
+
+
+def test_copy_source_rejects_relative_path():
+    import tempfile, pytest
+    from worker.utils.copy import fetch_copy_source
+    with tempfile.TemporaryDirectory() as dest_dir:
+        with pytest.raises(ValueError, match="absolute"):
+            fetch_copy_source("relative/path", dest_dir)
