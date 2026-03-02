@@ -257,6 +257,10 @@ export default function App() {
     // Keep legacy key synchronized for older code paths.
     localStorage.setItem("hydra_theme", darkMode ? "dark" : "light");
   }, [darkMode, themePreference]);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-hydra-theme", darkMode ? "dark" : "light");
+  }, [darkMode]);
   
   return (
     <ActiveDomainProvider>
