@@ -26,6 +26,7 @@ Hydra Jobs is a distributed job runner designed for flexibility and scalability.
 ## Workflow & Architecture (Internal Details)
 
 - Scheduler (`scheduler/`) runs four background loops: `scheduling_loop` dispatches jobs from `job_queue:<domain>:pending` to `job_queue:<domain>:<worker_id>`, `failover_loop` requeues jobs from offline workers, `schedule_trigger_loop` advances cron/interval jobs, and `run_event_loop` consumes `run_events:<domain>` from Redis and persists run docs in Mongo.
+- Terminal failures can trigger `on_failure_webhooks` and SMTP email alerts (`on_failure_email_to` + `on_failure_email_credential_ref`).
 - Scheduler admin API can provision domain-scoped Redis ACL worker access (`/admin/domains/{domain}/redis_acl/rotate`) and returns credentials for that domain; workers use `DOMAIN` as Redis username and `REDIS_PASSWORD` as secret.
 - Worker Redis ACL username is the domain name itself (legacy hashed usernames are cleaned up on rotation/delete).
 - Scheduler worker APIs include:

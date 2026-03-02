@@ -18,6 +18,33 @@ import { WorkerDetailPage } from "./pages/WorkerDetail";
 import { ActiveDomainProvider, useActiveDomain } from "./context/ActiveDomainContext";
 import { ThemeProvider, useTheme } from "./theme";
 
+const THEME_PREF_KEY = "hydra_theme_preference";
+type ThemePreference = "system" | "light" | "dark";
+
+function getSystemDarkMode(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return false;
+  }
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+function getInitialThemePreference(): ThemePreference {
+  try {
+    const pref = localStorage.getItem(THEME_PREF_KEY);
+    if (pref === "light" || pref === "dark" || pref === "system") {
+      return pref;
+    }
+    // Backward compatibility with older binary setting.
+    const legacy = localStorage.getItem("hydra_theme");
+    if (legacy === "light" || legacy === "dark") {
+      return legacy;
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return "system";
+}
+
 function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (dark: boolean) => void }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -202,22 +229,49 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
 }
 
 export default function App() {
+  const [themePreference, setThemePreference] = useState<ThemePreference>(() => getInitialThemePreference());
   const [darkMode, setDarkMode] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem("hydra_theme") === "dark";
-    } catch {
-      return false;
-    }
+    const pref = getInitialThemePreference();
+    return pref === "system" ? getSystemDarkMode() : pref === "dark";
   });
 
   useEffect(() => {
+    if (themePreference !== "system") return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => setDarkMode(media.matches);
+    apply();
+    media.addEventListener?.("change", apply);
+    return () => media.removeEventListener?.("change", apply);
+  }, [themePreference]);
+
+  useEffect(() => {
+    if (themePreference === "system") {
+      setDarkMode(getSystemDarkMode());
+    } else {
+      setDarkMode(themePreference === "dark");
+    }
+  }, [themePreference]);
+
+  useEffect(() => {
+    localStorage.setItem(THEME_PREF_KEY, themePreference);
+    // Keep legacy key synchronized for older code paths.
     localStorage.setItem("hydra_theme", darkMode ? "dark" : "light");
+  }, [darkMode, themePreference]);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-hydra-theme", darkMode ? "dark" : "light");
   }, [darkMode]);
   
   return (
     <ActiveDomainProvider>
       <ThemeProvider isDarkMode={darkMode}>
-        <AppShellWrapper darkMode={darkMode} setDarkMode={setDarkMode} />
+        <AppShellWrapper
+          darkMode={darkMode}
+          setDarkMode={(dark) => {
+            setThemePreference(dark ? "dark" : "light");
+            setDarkMode(dark);
+          }}
+        />
       </ThemeProvider>
     </ActiveDomainProvider>
   );

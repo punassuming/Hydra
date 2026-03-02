@@ -32,8 +32,13 @@ class ScheduleConfig(BaseModel):
         if self.mode == "cron":
             if not self.cron:
                 raise ValueError("cron expression is required when mode='cron'")
-            if not croniter.is_valid(self.cron):
-                raise ValueError(f"Invalid cron expression: {self.cron}")
+            try:
+                if not croniter.is_valid(self.cron):
+                    raise ValueError("invalid cron syntax")
+                # Force parser execution so parser-specific diagnostics surface.
+                croniter(self.cron, datetime.utcnow()).get_next(datetime)
+            except Exception as exc:
+                raise ValueError(f"Invalid cron expression '{self.cron}': {exc}") from exc
         return self
 
 
@@ -70,6 +75,8 @@ class JobDefinition(BaseModel):
     max_retries: int = 0
     retry_delay_seconds: int = 0
     on_failure_webhooks: List[str] = Field(default_factory=list)
+    on_failure_email_to: List[str] = Field(default_factory=list)
+    on_failure_email_credential_ref: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -101,6 +108,8 @@ class JobCreate(BaseModel):
     max_retries: int = 0
     retry_delay_seconds: int = 0
     on_failure_webhooks: List[str] = Field(default_factory=list)
+    on_failure_email_to: List[str] = Field(default_factory=list)
+    on_failure_email_credential_ref: Optional[str] = None
 
 
 class JobUpdate(BaseModel):
@@ -121,6 +130,8 @@ class JobUpdate(BaseModel):
     max_retries: Optional[int] = None
     retry_delay_seconds: Optional[int] = None
     on_failure_webhooks: Optional[List[str]] = None
+    on_failure_email_to: Optional[List[str]] = None
+    on_failure_email_credential_ref: Optional[str] = None
 
 
 class JobValidationResult(BaseModel):

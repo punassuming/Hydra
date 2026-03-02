@@ -14,6 +14,15 @@ function statusColor(status: string) {
   return "#64748b";
 }
 
+function colorFromName(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i += 1) {
+    hash = (hash * 31 + name.charCodeAt(i)) | 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue} 70% 45%)`;
+}
+
 function opColor(opType: string) {
   if (opType.includes("fail")) return "error";
   if (opType.includes("start")) return "processing";
@@ -140,7 +149,8 @@ function WorkerTimeline({ data }: { data?: WorkerTimelineData }) {
                         top: 4,
                         bottom: 4,
                         borderRadius: 5,
-                        background: statusColor(entry.status),
+                        background: colorFromName(entry.job_name || entry.job_id),
+                        border: `1px solid ${statusColor(entry.status)}`,
                         opacity: entry.bypass_concurrency ? 0.75 : 0.95,
                         outline: entry.bypass_concurrency ? "2px dashed rgba(15, 23, 42, 0.25)" : "none",
                         overflow: "hidden",
@@ -172,25 +182,24 @@ export function WorkerDetailPage() {
   const { workerId } = useParams<{ workerId: string }>();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const [metricsWindow, setMetricsWindow] = useState<number>(() => {
-    const v = Number(localStorage.getItem("hydra_worker_metrics_window"));
+  const [windowMinutes, setWindowMinutes] = useState<number>(() => {
+    const v =
+      Number(localStorage.getItem("hydra_worker_window")) ||
+      Number(localStorage.getItem("hydra_worker_metrics_window")) ||
+      Number(localStorage.getItem("hydra_worker_timeline_window"));
     return Number.isFinite(v) && v > 0 ? v : 30;
-  });
-  const [timelineWindow, setTimelineWindow] = useState<number>(() => {
-    const v = Number(localStorage.getItem("hydra_worker_timeline_window"));
-    return Number.isFinite(v) && v > 0 ? v : 180;
   });
   const { data, isLoading } = useQuery({ queryKey: ["workers", domain], queryFn: fetchWorkers, refetchInterval: 5000 });
   const worker = data?.find((w) => w.worker_id === workerId);
   const metricsQuery = useQuery({
-    queryKey: ["worker-metrics", domain, workerId, metricsWindow],
-    queryFn: () => fetchWorkerMetrics(workerId!, metricsWindow),
+    queryKey: ["worker-metrics", domain, workerId, windowMinutes],
+    queryFn: () => fetchWorkerMetrics(workerId!, windowMinutes),
     enabled: Boolean(workerId),
     refetchInterval: 10000,
   });
   const timelineQuery = useQuery({
-    queryKey: ["worker-timeline", domain, workerId, timelineWindow],
-    queryFn: () => fetchWorkerTimeline(workerId!, timelineWindow),
+    queryKey: ["worker-timeline", domain, workerId, windowMinutes],
+    queryFn: () => fetchWorkerTimeline(workerId!, windowMinutes),
     enabled: Boolean(workerId),
     refetchInterval: 10000,
   });
@@ -203,11 +212,10 @@ export function WorkerDetailPage() {
   const metricPoints = useMemo(() => metricsQuery.data?.points ?? [], [metricsQuery.data?.points]);
 
   useEffect(() => {
-    localStorage.setItem("hydra_worker_metrics_window", String(metricsWindow));
-  }, [metricsWindow]);
-  useEffect(() => {
-    localStorage.setItem("hydra_worker_timeline_window", String(timelineWindow));
-  }, [timelineWindow]);
+    localStorage.setItem("hydra_worker_window", String(windowMinutes));
+    localStorage.setItem("hydra_worker_metrics_window", String(windowMinutes));
+    localStorage.setItem("hydra_worker_timeline_window", String(windowMinutes));
+  }, [windowMinutes]);
 
   const setStateMutation = useMutation({
     mutationFn: (state: string) => apiClient.post(`/workers/${workerId}/state`, { state }),
@@ -295,17 +303,23 @@ export function WorkerDetailPage() {
         title="Runtime Metrics Trend"
         extra={
           <Select
-            value={metricsWindow}
-            onChange={setMetricsWindow}
+            value={windowMinutes}
+            onChange={setWindowMinutes}
             options={[
+              { label: "10m", value: 10 },
               { label: "30m", value: 30 },
               { label: "60m", value: 60 },
               { label: "120m", value: 120 },
+              { label: "180m", value: 180 },
+              { label: "360m", value: 360 },
             ]}
-            style={{ width: 110 }}
+            style={{ width: 120 }}
           />
         }
       >
+        <Typography.Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
+          Time window applies to both runtime trends and execution timeline.
+        </Typography.Text>
         <Row gutter={12}>
           <Col xs={24} xl={8}>
             <MetricLineChart title="Memory RSS" points={metricPoints} selector={(p) => p.memory_rss_mb} unit="MB" color="#0284c7" />
@@ -323,14 +337,17 @@ export function WorkerDetailPage() {
         title="Worker Execution Timeline"
         extra={
           <Select
-            value={timelineWindow}
-            onChange={setTimelineWindow}
+            value={windowMinutes}
+            onChange={setWindowMinutes}
             options={[
-              { label: "1h", value: 60 },
-              { label: "3h", value: 180 },
-              { label: "6h", value: 360 },
+              { label: "10m", value: 10 },
+              { label: "30m", value: 30 },
+              { label: "60m", value: 60 },
+              { label: "120m", value: 120 },
+              { label: "180m", value: 180 },
+              { label: "360m", value: 360 },
             ]}
-            style={{ width: 110 }}
+            style={{ width: 120 }}
           />
         }
       >

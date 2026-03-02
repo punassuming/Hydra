@@ -89,12 +89,20 @@ textarea {
   font-size: 0.8rem;
 }
 
-.job-row-selected {
+.job-row-selected > td {
   background-color: #e6f4ff !important;
 }
 
-.job-row:hover {
+.job-row:hover > td {
   background-color: #f0f5ff !important;
+}
+
+[data-hydra-theme="dark"] .job-row-selected > td {
+  background-color: rgba(56, 189, 248, 0.18) !important;
+}
+
+[data-hydra-theme="dark"] .job-row:hover > td {
+  background-color: rgba(148, 163, 184, 0.16) !important;
 }
 
 .inline-field {
