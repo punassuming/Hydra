@@ -21,6 +21,7 @@ services:
       - .env
     environment:
       - REDIS_URL=redis://redis:6379/0
+      - REDIS_PASSWORD=${SCHEDULER_REDIS_PASSWORD:-}
       - MONGO_URL=mongodb://mongo:27017
       - MONGO_DB=hydra_jobs
       - SCHEDULER_HEARTBEAT_TTL=10
