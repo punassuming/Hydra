@@ -44,9 +44,9 @@ for domain in "${domains[@]}"; do
   fi
   env_file="/tmp/hydra-redis-acl-${domain}.env"
   {
-    echo "WORKER_DOMAIN=${domain}"
+    echo "DOMAIN=${domain}"
     echo "WORKER_REQUIRE_REDIS_ACL=true"
-    echo "REDIS_USERNAME=${user}"
+    echo "# REDIS_USERNAME is derived from DOMAIN by worker runtime"
     echo "REDIS_PASSWORD=${pass}"
   } > "${env_file}"
   echo "domain=${domain} user=${user} password=<redacted> env=${env_file}"

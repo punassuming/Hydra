@@ -43,26 +43,8 @@ if [[ -z "${REDIS_ADMIN_PASSWORD}" ]]; then
   exit 1
 fi
 
-normalize_domain() {
-  local input="$1"
-  local out
-  out="$(printf '%s' "${input,,}" | tr -c 'a-z0-9' '_' | sed 's/^_*//;s/_*$//')"
-  if [[ -z "${out}" ]]; then
-    out="domain"
-  fi
-  printf '%s' "${out}"
-}
-
-worker_username_for_domain() {
-  local d="$1"
-  local normalized suffix
-  normalized="$(normalize_domain "${d}")"
-  suffix="$(printf '%s' "${d}" | sha1sum | awk '{print $1}' | cut -c1-8)"
-  printf 'hydra_worker_%s_%s' "${normalized}" "${suffix}"
-}
-
 if [[ -z "${WORKER_USERNAME}" ]]; then
-  WORKER_USERNAME="$(worker_username_for_domain "${DOMAIN}")"
+  WORKER_USERNAME="${DOMAIN}"
 fi
 
 if [[ -z "${WORKER_PASSWORD}" ]]; then
@@ -115,12 +97,11 @@ commands=(
   "${key_patterns[@]}" "${channel_patterns[@]}" "${commands[@]}" >/dev/null
 
 echo "Configured worker ACL user for domain ${DOMAIN}"
-echo "REDIS_USERNAME=${WORKER_USERNAME}"
 echo "REDIS_PASSWORD=${WORKER_PASSWORD}"
 echo ""
 echo "Worker env example:"
-echo "WORKER_DOMAIN=${DOMAIN}"
+echo "DOMAIN=${DOMAIN}"
 echo "WORKER_REQUIRE_REDIS_ACL=true"
 echo "REDIS_URL=${REDIS_URL:-redis://${REDIS_HOST}:${REDIS_PORT}/${REDIS_DB}}"
-echo "REDIS_USERNAME=${WORKER_USERNAME}"
+echo "# REDIS_USERNAME is derived from DOMAIN by worker runtime"
 echo "REDIS_PASSWORD=${WORKER_PASSWORD}"

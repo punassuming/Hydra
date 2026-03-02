@@ -18,14 +18,120 @@ import {
   CredentialRef,
   CredentialPayload,
 } from "../api/admin";
+import {
+  fetchMyCredentials,
+  createMyCredential,
+  updateMyCredential,
+  deleteMyCredential,
+  fetchMyDomainSettings,
+  updateMyDomainSettings,
+  rotateMyDomainToken,
+  rotateMyDomainWorkerRedisAcl,
+} from "../api/domain";
 import { setTokenForDomain, getEffectiveToken, withTempToken, hasTokenForDomain, getAdminToken } from "../api/client";
 import { createJob } from "../api/jobs";
 import { useEffect, useState } from "react";
 import { useActiveDomain } from "../context/ActiveDomainContext";
 
+function normalizeCredentialPayload(values: any): CredentialPayload {
+  const payload: CredentialPayload = {
+    name: values.name,
+    credential_type: values.credential_type,
+    dialect: values.dialect || undefined,
+    connection_uri: values.connection_uri || undefined,
+    username: values.username || undefined,
+    password: values.password || undefined,
+    host: values.host || undefined,
+    port: values.port ? Number(values.port) : undefined,
+    database: values.database || undefined,
+  };
+  if (values.extra_json) {
+    payload.extra = JSON.parse(values.extra_json);
+  }
+  return payload;
+}
+
+function CredentialTypeFields() {
+  return (
+    <Form.Item noStyle shouldUpdate={(prev, cur) => prev.credential_type !== cur.credential_type}>
+      {({ getFieldValue }) => {
+        const type = getFieldValue("credential_type") || "database";
+        if (type === "database") {
+          return (
+            <>
+              <Form.Item name="dialect" label="Dialect">
+                <Select allowClear placeholder="Select dialect" options={[
+                  { label: "PostgreSQL", value: "postgres" },
+                  { label: "MySQL", value: "mysql" },
+                  { label: "MSSQL", value: "mssql" },
+                  { label: "Oracle", value: "oracle" },
+                  { label: "MongoDB", value: "mongodb" },
+                ]} />
+              </Form.Item>
+              <Form.Item name="connection_uri" label="Connection URI">
+                <Input.Password placeholder="postgresql://user:pass@host/db" />
+              </Form.Item>
+              <Form.Item name="username" label="Username">
+                <Input placeholder="db_user" />
+              </Form.Item>
+              <Form.Item name="password" label="Password">
+                <Input.Password placeholder="Password" />
+              </Form.Item>
+              <Form.Item name="host" label="Host">
+                <Input placeholder="db.example.com" />
+              </Form.Item>
+              <Form.Item name="port" label="Port">
+                <Input type="number" placeholder="5432" />
+              </Form.Item>
+              <Form.Item name="database" label="Database">
+                <Input placeholder="mydb" />
+              </Form.Item>
+            </>
+          );
+        }
+        if (type === "api_key") {
+          return (
+            <>
+              <Form.Item name="username" label="Key Name (optional)">
+                <Input placeholder="Authorization" />
+              </Form.Item>
+              <Form.Item name="password" label="API Key / Token" rules={[{ required: true }]}>
+                <Input.Password placeholder="sk-..." />
+              </Form.Item>
+              <Form.Item name="extra_json" label="Extra JSON (optional)">
+                <AntInput.TextArea rows={3} placeholder='{"base_url":"https://api.example.com"}' />
+              </Form.Item>
+            </>
+          );
+        }
+        return (
+          <>
+            <Form.Item name="username" label="Username (optional)">
+              <Input placeholder="service_user" />
+            </Form.Item>
+            <Form.Item name="password" label="Secret" rules={[{ required: true }]}>
+              <Input.Password placeholder="Secret value" />
+            </Form.Item>
+            <Form.Item name="extra_json" label="Extra JSON (optional)">
+              <AntInput.TextArea rows={3} placeholder='{"region":"us-east-1"}' />
+            </Form.Item>
+          </>
+        );
+      }}
+    </Form.Item>
+  );
+}
+
 export function AdminPage() {
   const queryClient = useQueryClient();
-  const domainsQuery = useQuery({ queryKey: ["domains"], queryFn: fetchDomains, refetchInterval: 5000 });
+  const adminToken = getAdminToken();
+  const isAdmin = Boolean(adminToken);
+  const domainsQuery = useQuery({
+    queryKey: ["domains"],
+    queryFn: fetchDomains,
+    refetchInterval: 5000,
+    enabled: isAdmin,
+  });
   const [tokenModal, setTokenModal] = useState<{ open: boolean; token?: string; domain?: string }>({ open: false });
   const [redisAclModal, setRedisAclModal] = useState<{ open: boolean; domain?: string; acl?: WorkerRedisAclInfo }>({ open: false });
   const [switchModal, setSwitchModal] = useState<{ open: boolean; domain?: string; token?: string }>({ open: false });
@@ -35,6 +141,9 @@ export function AdminPage() {
   const { domain: activeDomain, setDomain } = useActiveDomain();
   const [importDomain, setImportDomain] = useState<string>(activeDomain);
   useEffect(() => setImportDomain(activeDomain), [activeDomain]);
+  const [createCredForm] = Form.useForm();
+  const [updateCredForm] = Form.useForm();
+  const [domainSettingsForm] = Form.useForm();
   const rotateMut = useMutation({
     mutationFn: (domain: string) => rotateDomainToken(domain),
     onSuccess: (data) => {
@@ -117,43 +226,85 @@ export function AdminPage() {
     }},
   ];
   const [selectedSample, setSelectedSample] = useState<string | undefined>(undefined);
-  const templatesQuery = useQuery({ queryKey: ["templates"], queryFn: fetchTemplates, staleTime: 10000 });
-  const adminToken = getAdminToken();
+  const templatesQuery = useQuery({ queryKey: ["templates"], queryFn: fetchTemplates, staleTime: 10000, enabled: isAdmin });
+
+  const domainSettingsQuery = useQuery({
+    queryKey: ["domain-settings", activeDomain],
+    queryFn: fetchMyDomainSettings,
+    refetchInterval: 10000,
+  });
+  useEffect(() => {
+    if (domainSettingsQuery.data) {
+      domainSettingsForm.setFieldsValue({
+        display_name: domainSettingsQuery.data.display_name || activeDomain,
+        description: domainSettingsQuery.data.description || "",
+      });
+    }
+  }, [domainSettingsQuery.data, domainSettingsForm, activeDomain]);
 
   // --- Credential management state ---
   const [credDomain, setCredDomain] = useState<string>(activeDomain);
   useEffect(() => setCredDomain(activeDomain), [activeDomain]);
   const credentialsQuery = useQuery({
-    queryKey: ["credentials", credDomain],
-    queryFn: () => fetchCredentials(credDomain),
+    queryKey: ["credentials", isAdmin ? credDomain : activeDomain, isAdmin ? "admin" : "domain"],
+    queryFn: () => (isAdmin ? fetchCredentials(credDomain) : fetchMyCredentials()),
     refetchInterval: 10000,
   });
   const [credFormVisible, setCredFormVisible] = useState(false);
-  const [editingCred, setEditingCred] = useState<string | null>(null);
+  const [editingCred, setEditingCred] = useState<CredentialRef | null>(null);
 
   const createCredMut = useMutation({
-    mutationFn: (payload: CredentialPayload) => createCredential(payload, credDomain),
+    mutationFn: (payload: CredentialPayload) => (isAdmin ? createCredential(payload, credDomain) : createMyCredential(payload)),
     onSuccess: () => {
       message.success("Credential created");
-      queryClient.invalidateQueries({ queryKey: ["credentials", credDomain] });
+      queryClient.invalidateQueries({ queryKey: ["credentials"] });
       setCredFormVisible(false);
+      createCredForm.resetFields();
     },
     onError: (err: Error) => message.error(err.message),
   });
   const updateCredMut = useMutation({
-    mutationFn: ({ name, payload }: { name: string; payload: CredentialPayload }) => updateCredential(name, payload, credDomain),
+    mutationFn: ({ name, payload }: { name: string; payload: CredentialPayload }) =>
+      (isAdmin ? updateCredential(name, payload, credDomain) : updateMyCredential(name, payload)),
     onSuccess: () => {
       message.success("Credential updated");
-      queryClient.invalidateQueries({ queryKey: ["credentials", credDomain] });
+      queryClient.invalidateQueries({ queryKey: ["credentials"] });
       setEditingCred(null);
+      updateCredForm.resetFields();
     },
     onError: (err: Error) => message.error(err.message),
   });
   const deleteCredMut = useMutation({
-    mutationFn: (name: string) => deleteCredential(name, credDomain),
+    mutationFn: (name: string) => (isAdmin ? deleteCredential(name, credDomain) : deleteMyCredential(name)),
     onSuccess: () => {
       message.success("Credential deleted");
-      queryClient.invalidateQueries({ queryKey: ["credentials", credDomain] });
+      queryClient.invalidateQueries({ queryKey: ["credentials"] });
+    },
+    onError: (err: Error) => message.error(err.message),
+  });
+
+  const updateMyDomainMut = useMutation({
+    mutationFn: (payload: { display_name: string; description?: string }) => updateMyDomainSettings(payload),
+    onSuccess: () => {
+      message.success("Domain settings updated");
+      queryClient.invalidateQueries({ queryKey: ["domain-settings", activeDomain] });
+      queryClient.invalidateQueries({ queryKey: ["domains"] });
+    },
+    onError: (err: Error) => message.error(err.message),
+  });
+  const rotateMyTokenMut = useMutation({
+    mutationFn: () => rotateMyDomainToken(),
+    onSuccess: (data) => {
+      message.success("Domain token rotated");
+      setTokenModal({ open: true, token: data.token, domain: data.domain });
+    },
+    onError: (err: Error) => message.error(err.message),
+  });
+  const rotateMyAclMut = useMutation({
+    mutationFn: () => rotateMyDomainWorkerRedisAcl(),
+    onSuccess: (data) => {
+      setRedisAclModal({ open: true, domain: data.domain, acl: data.worker_redis_acl });
+      message.success("Worker Redis ACL rotated");
     },
     onError: (err: Error) => message.error(err.message),
   });
@@ -200,7 +351,7 @@ export function AdminPage() {
             size="small"
             onClick={() => updateMut.mutate({ domain: record.domain, payload: { display_name: record.display_name || record.domain } })}
           >
-            Save Name
+            Save Display Name
           </Button>
           <Button size="small" onClick={() => rotateMut.mutate(record.domain)}>
             Rotate Token
@@ -237,10 +388,12 @@ export function AdminPage() {
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
       <Typography.Title level={3} style={{ marginBottom: 0 }}>
-        Admin – Domains
+        {isAdmin ? "Admin – Domains" : `Domain Settings – ${activeDomain}`}
       </Typography.Title>
       <Typography.Text type="secondary">
-        Requires admin token. Manage domains and their metadata; update tokens and switch the UI session token when needed.
+        {isAdmin
+          ? "Manage domains and metadata, rotate auth material, and maintain credentials."
+          : "Manage your active domain settings and credentials with your domain token."}
       </Typography.Text>
       <Card title="Worker Auth & Setup">
         <Space direction="vertical" style={{ width: "100%" }} size={6}>
@@ -251,19 +404,50 @@ export function AdminPage() {
             1) Create or rotate a domain token in this page. 2) Start worker with that domain + token.
           </Typography.Text>
           <Typography.Text>
-            Optional hardening: rotate worker Redis ACL and run worker with <Typography.Text code>REDIS_USERNAME</Typography.Text> +{" "}
-            <Typography.Text code>REDIS_PASSWORD</Typography.Text> for domain-scoped Redis access only.
+            Optional hardening: rotate worker Redis ACL and run worker with <Typography.Text code>REDIS_PASSWORD</Typography.Text>.
+            Redis username is derived from <Typography.Text code>DOMAIN</Typography.Text>.
           </Typography.Text>
           <Typography.Paragraph style={{ marginBottom: 0 }}>
             <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
-{`WORKER_DOMAIN=${activeDomain} API_TOKEN=<domain_token> \\
+{`DOMAIN=${activeDomain} API_TOKEN=<domain_token> \\
 REDIS_URL=redis://localhost:6379/0 \\
-REDIS_USERNAME=<worker_redis_acl_username> REDIS_PASSWORD=<worker_redis_acl_password> \\
+REDIS_PASSWORD=<worker_redis_acl_password> \\
 docker compose -f docker-compose.worker.yml up --build`}
             </pre>
           </Typography.Paragraph>
         </Space>
       </Card>
+      <Card title={`Current Domain Settings (${activeDomain})`}>
+        <Form
+          form={domainSettingsForm}
+          layout="vertical"
+          onFinish={(values) => {
+            updateMyDomainMut.mutate({
+              display_name: values.display_name || activeDomain,
+              description: values.description || "",
+            });
+          }}
+        >
+          <Form.Item name="display_name" label="Display Name" rules={[{ required: true }]}>
+            <Input placeholder={activeDomain} />
+          </Form.Item>
+          <Form.Item name="description" label="Description">
+            <Input.TextArea rows={2} placeholder="Optional notes" />
+          </Form.Item>
+          <Space>
+            <Button type="primary" htmlType="submit" loading={updateMyDomainMut.isPending}>
+              Save Domain Settings
+            </Button>
+            <Button onClick={() => rotateMyTokenMut.mutate()} loading={rotateMyTokenMut.isPending}>
+              Rotate My Domain Token
+            </Button>
+            <Button onClick={() => rotateMyAclMut.mutate()} loading={rotateMyAclMut.isPending}>
+              Rotate My Redis ACL
+            </Button>
+          </Space>
+        </Form>
+      </Card>
+      {isAdmin && (
       <Card title="Create Domain">
         <Form
           layout="vertical"
@@ -291,6 +475,8 @@ docker compose -f docker-compose.worker.yml up --build`}
           </Button>
         </Form>
       </Card>
+      )}
+      {isAdmin && (
       <Card title="Domains">
         <Table
           dataSource={(domainsQuery.data?.domains ?? []).map((d) => ({ ...d, key: d.domain }))}
@@ -300,18 +486,25 @@ docker compose -f docker-compose.worker.yml up --build`}
           size="small"
         />
       </Card>
-      <Card title={`Credentials (domain: ${credDomain})`}>
+      )}
+      <Card title={`Credentials (domain: ${isAdmin ? credDomain : activeDomain})`}>
         <Space direction="vertical" style={{ width: "100%" }}>
           <Typography.Text type="secondary">
             Manage encrypted credentials for this domain. Secrets are write-only — you can create or update them, but the stored values are never displayed.
           </Typography.Text>
-          <Select
-            style={{ minWidth: 200 }}
-            placeholder="Select domain for credentials"
-            options={domainsQuery.data?.domains?.map((d) => ({ label: d.domain, value: d.domain })) ?? []}
-            value={credDomain}
-            onChange={(val) => setCredDomain(val)}
-          />
+          <Typography.Text type="secondary">
+            Use secrets in jobs by setting <Typography.Text code>executor.credential_ref</Typography.Text> to the credential name
+            (for SQL jobs, this is resolved server-side to a connection URI at dispatch time).
+          </Typography.Text>
+          {isAdmin && (
+            <Select
+              style={{ minWidth: 200 }}
+              placeholder="Select domain for credentials"
+              options={domainsQuery.data?.domains?.map((d) => ({ label: d.domain, value: d.domain })) ?? []}
+              value={credDomain}
+              onChange={(val) => setCredDomain(val)}
+            />
+          )}
           <Table
             dataSource={(credentialsQuery.data?.credentials ?? []).map((c) => ({ ...c, key: c.name }))}
             loading={credentialsQuery.isLoading}
@@ -325,7 +518,16 @@ docker compose -f docker-compose.worker.yml up --build`}
                 key: "actions",
                 render: (_: unknown, record: CredentialRef) => (
                   <Space>
-                    <Button size="small" onClick={() => setEditingCred(record.name)}>
+                    <Button
+                      size="small"
+                      onClick={() => {
+                        setEditingCred(record);
+                        updateCredForm.setFieldsValue({
+                          credential_type: record.credential_type || "database",
+                          dialect: record.dialect || undefined,
+                        });
+                      }}
+                    >
                       Update Secret
                     </Button>
                     <Button size="small" danger onClick={() => deleteCredMut.mutate(record.name)}>
@@ -346,13 +548,22 @@ docker compose -f docker-compose.worker.yml up --build`}
       <Modal
         open={credFormVisible}
         title="Add Credential"
-        onCancel={() => setCredFormVisible(false)}
+        onCancel={() => {
+          setCredFormVisible(false);
+          createCredForm.resetFields();
+        }}
         footer={null}
       >
         <Form
+          form={createCredForm}
           layout="vertical"
+          initialValues={{ credential_type: "database" }}
           onFinish={(values) => {
-            createCredMut.mutate(values as CredentialPayload);
+            try {
+              createCredMut.mutate(normalizeCredentialPayload(values));
+            } catch (err) {
+              message.error("Invalid extra JSON");
+            }
           }}
         >
           <Form.Item name="name" label="Name" rules={[{ required: true }]}>
@@ -365,33 +576,7 @@ docker compose -f docker-compose.worker.yml up --build`}
               { label: "Generic", value: "generic" },
             ]} />
           </Form.Item>
-          <Form.Item name="dialect" label="Dialect">
-            <Select allowClear placeholder="Select dialect" options={[
-              { label: "PostgreSQL", value: "postgres" },
-              { label: "MySQL", value: "mysql" },
-              { label: "MSSQL", value: "mssql" },
-              { label: "Oracle", value: "oracle" },
-              { label: "MongoDB", value: "mongodb" },
-            ]} />
-          </Form.Item>
-          <Form.Item name="connection_uri" label="Connection URI">
-            <Input.Password placeholder="postgresql://user:pass@host/db" />
-          </Form.Item>
-          <Form.Item name="username" label="Username">
-            <Input placeholder="db_user" />
-          </Form.Item>
-          <Form.Item name="password" label="Password">
-            <Input.Password placeholder="Password" />
-          </Form.Item>
-          <Form.Item name="host" label="Host">
-            <Input placeholder="db.example.com" />
-          </Form.Item>
-          <Form.Item name="port" label="Port">
-            <Input type="number" placeholder="5432" />
-          </Form.Item>
-          <Form.Item name="database" label="Database">
-            <Input placeholder="mydb" />
-          </Form.Item>
+          <CredentialTypeFields />
           <Button type="primary" htmlType="submit" loading={createCredMut.isPending}>
             Create
           </Button>
@@ -399,18 +584,27 @@ docker compose -f docker-compose.worker.yml up --build`}
       </Modal>
       <Modal
         open={editingCred !== null}
-        title={`Update Credential: ${editingCred}`}
-        onCancel={() => setEditingCred(null)}
+        title={`Update Credential: ${editingCred?.name ?? ""}`}
+        onCancel={() => {
+          setEditingCred(null);
+          updateCredForm.resetFields();
+        }}
         footer={null}
       >
         <Typography.Text type="secondary" style={{ display: "block", marginBottom: 12 }}>
           Provide updated values. All secret fields will be re-encrypted. Previously stored values are not shown.
         </Typography.Text>
         <Form
+          form={updateCredForm}
           layout="vertical"
           onFinish={(values) => {
-            if (editingCred) {
-              updateCredMut.mutate({ name: editingCred, payload: { ...values, name: editingCred } as CredentialPayload });
+            if (editingCred?.name) {
+              try {
+                const payload = normalizeCredentialPayload({ ...values, name: editingCred.name });
+                updateCredMut.mutate({ name: editingCred.name, payload });
+              } catch (err) {
+                message.error("Invalid extra JSON");
+              }
             }
           }}
         >
@@ -421,33 +615,7 @@ docker compose -f docker-compose.worker.yml up --build`}
               { label: "Generic", value: "generic" },
             ]} />
           </Form.Item>
-          <Form.Item name="dialect" label="Dialect">
-            <Select allowClear placeholder="Select dialect" options={[
-              { label: "PostgreSQL", value: "postgres" },
-              { label: "MySQL", value: "mysql" },
-              { label: "MSSQL", value: "mssql" },
-              { label: "Oracle", value: "oracle" },
-              { label: "MongoDB", value: "mongodb" },
-            ]} />
-          </Form.Item>
-          <Form.Item name="connection_uri" label="Connection URI">
-            <Input.Password placeholder="postgresql://user:pass@host/db" />
-          </Form.Item>
-          <Form.Item name="username" label="Username">
-            <Input placeholder="db_user" />
-          </Form.Item>
-          <Form.Item name="password" label="Password">
-            <Input.Password placeholder="New password" />
-          </Form.Item>
-          <Form.Item name="host" label="Host">
-            <Input placeholder="db.example.com" />
-          </Form.Item>
-          <Form.Item name="port" label="Port">
-            <Input type="number" placeholder="5432" />
-          </Form.Item>
-          <Form.Item name="database" label="Database">
-            <Input placeholder="mydb" />
-          </Form.Item>
+          <CredentialTypeFields />
           <Button type="primary" htmlType="submit" loading={updateCredMut.isPending}>
             Update
           </Button>
@@ -459,7 +627,11 @@ docker compose -f docker-compose.worker.yml up --build`}
           <Select
             style={{ minWidth: 200 }}
             placeholder="Set active domain"
-            options={domainsQuery.data?.domains?.map((d) => ({ label: d.domain, value: d.domain })) ?? []}
+            options={
+              isAdmin
+                ? (domainsQuery.data?.domains?.map((d) => ({ label: d.domain, value: d.domain })) ?? [])
+                : [{ label: activeDomain, value: activeDomain }]
+            }
             value={importDomain}
             onChange={(val) => {
               setImportDomain(val);
@@ -653,9 +825,6 @@ docker compose -f docker-compose.worker.yml up --build`}
       >
         <Space direction="vertical" style={{ width: "100%" }}>
           <Typography.Text strong>Use these for workers in this domain. Credentials will not be shown again.</Typography.Text>
-          <Typography.Paragraph style={{ marginBottom: 0 }}>
-            <Typography.Text code>REDIS_USERNAME={redisAclModal.acl?.username ?? "-"}</Typography.Text>
-          </Typography.Paragraph>
           <Input.Password
             readOnly
             value={redisAclModal.acl?.password ?? ""}
@@ -668,9 +837,8 @@ docker compose -f docker-compose.worker.yml up --build`}
           <Typography.Text type="secondary">Worker startup example:</Typography.Text>
           <Typography.Paragraph style={{ marginBottom: 0 }}>
             <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
-{`WORKER_DOMAIN=${redisAclModal.domain ?? activeDomain} API_TOKEN=<domain_token> \\
+{`DOMAIN=${redisAclModal.domain ?? activeDomain} API_TOKEN=<domain_token> \\
 REDIS_URL=redis://localhost:6379/0 \\
-REDIS_USERNAME=${redisAclModal.acl?.username ?? "<worker_redis_acl_username>"} \\
 REDIS_PASSWORD=<worker_redis_acl_password> \\
 docker compose -f docker-compose.worker.yml up --build`}
             </pre>

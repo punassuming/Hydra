@@ -13,6 +13,7 @@ from .api.history import router as history_router
 from .api.logs import router as logs_router
 from .api.admin import router as admin_router
 from .api.credentials import router as credentials_router
+from .api.domain import router as domain_router
 from .api.ai import router as ai_router
 from .scheduler import scheduling_loop, failover_loop, schedule_trigger_loop, timeout_enforcement_loop
 from .run_events import run_event_loop
@@ -47,6 +48,7 @@ app.include_router(history_router)
 app.include_router(logs_router)
 app.include_router(admin_router)
 app.include_router(credentials_router)
+app.include_router(domain_router)
 app.include_router(ai_router)
 
 stop_event = threading.Event()

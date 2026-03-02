@@ -191,7 +191,7 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
             <Route path="/workers/:workerId" element={<WorkerDetailPage />} />
             <Route
               path="/admin"
-              element={isAdmin ? <AdminPage /> : <Typography.Text type="danger" style={{ padding: 24, display: "block" }}>Admin access requires an admin token. Use Settings to authenticate as admin.</Typography.Text>}
+              element={<AdminPage />}
             />
             <Route path="/jobs/:jobId" element={<JobDetailPage />} />
           </Routes>

@@ -33,11 +33,11 @@ def get_initial_state() -> str:
 
 
 def get_domain() -> str:
-    return os.getenv("WORKER_DOMAIN", "prod")
+    return (os.getenv("DOMAIN") or "prod").strip()
 
 
 def get_domain_token() -> str:
-    token = os.getenv("WORKER_DOMAIN_TOKEN", "") or os.getenv("API_TOKEN", "")
+    token = (os.getenv("API_TOKEN") or "").strip()
     if not token:
-        raise RuntimeError("WORKER_DOMAIN_TOKEN (or API_TOKEN) is required for domain-scoped worker registration")
+        raise RuntimeError("API_TOKEN is required for domain-scoped worker registration")
     return token

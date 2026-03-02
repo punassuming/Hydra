@@ -12,6 +12,10 @@ def _normalized_domain(domain: str) -> str:
 
 
 def worker_acl_username(domain: str) -> str:
+    return (domain or "").strip()
+
+
+def _legacy_worker_acl_username(domain: str) -> str:
     normalized = _normalized_domain(domain)
     suffix = hashlib.sha1((domain or "").encode("utf-8")).hexdigest()[:8]
     return f"hydra_worker_{normalized}_{suffix}"
@@ -56,6 +60,7 @@ def worker_acl_commands() -> list[str]:
 def ensure_worker_acl_user(domain: str, password: str | None = None) -> dict:
     r = get_redis()
     username = worker_acl_username(domain)
+    legacy_username = _legacy_worker_acl_username(domain)
     generated_password = password or secrets.token_hex(24)
     args = [
         "ACL",
@@ -69,6 +74,12 @@ def ensure_worker_acl_user(domain: str, password: str | None = None) -> dict:
     args.extend(worker_acl_channel_patterns(domain))
     args.extend(worker_acl_commands())
     r.execute_command(*args)
+    # Remove any legacy hashed username for the same domain to avoid stale credential confusion.
+    if legacy_username != username:
+        try:
+            r.execute_command("ACL", "DELUSER", legacy_username)
+        except ResponseError:
+            pass
     return {
         "username": username,
         "password": generated_password,
@@ -81,8 +92,17 @@ def ensure_worker_acl_user(domain: str, password: str | None = None) -> dict:
 def delete_worker_acl_user(domain: str) -> bool:
     r = get_redis()
     username = worker_acl_username(domain)
+    legacy_username = _legacy_worker_acl_username(domain)
+    removed_any = False
     try:
         removed = r.execute_command("ACL", "DELUSER", username)
-        return bool(int(removed))
+        removed_any = removed_any or bool(int(removed))
     except ResponseError:
-        return False
+        pass
+    if legacy_username != username:
+        try:
+            removed = r.execute_command("ACL", "DELUSER", legacy_username)
+            removed_any = removed_any or bool(int(removed))
+        except ResponseError:
+            pass
+    return removed_any
