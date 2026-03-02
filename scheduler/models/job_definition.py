@@ -54,6 +54,8 @@ class SourceConfig(BaseModel):
     protocol: Literal["git"] = "git"
     url: str
     ref: str = "main"
+    path: Optional[str] = None
+    credential_ref: Optional[str] = None
 
 
 class JobDefinition(BaseModel):

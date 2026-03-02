@@ -187,7 +187,7 @@ def execute_job(
     if source and source.get("url"):
         tmp_source_dir = tempfile.mkdtemp(prefix=f"hydra-source-{job_identifier}-")
         try:
-            fetch_git_source(source["url"], source.get("ref", "main"), tmp_source_dir)
+            fetch_git_source(source["url"], source.get("ref", "main"), tmp_source_dir, token=source.get("token") or "")
             # Determine effective workdir
             # 1. Start at repo root
             base_path = tmp_source_dir

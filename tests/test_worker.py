@@ -103,3 +103,26 @@ def test_completion_helpers_are_strict():
     assert success
     success, reason = _contains_none("abc def", ["abc"])
     assert not success and "forbidden" in reason.lower()
+
+
+def test_git_token_injection_https():
+    from worker.utils.git import _inject_token_into_url
+    url = "https://github.com/user/repo.git"
+    result = _inject_token_into_url(url, "mytoken")
+    assert "x-oauth-token:mytoken@github.com" in result
+    assert result.startswith("https://")
+
+
+def test_git_token_injection_ssh_passthrough():
+    from worker.utils.git import _inject_token_into_url
+    url = "git@github.com:user/repo.git"
+    result = _inject_token_into_url(url, "mytoken")
+    # SSH URLs should pass through unchanged
+    assert result == url
+
+
+def test_git_token_injection_empty_token():
+    from worker.utils.git import _inject_token_into_url
+    url = "https://github.com/user/repo.git"
+    result = _inject_token_into_url(url, "")
+    assert result == url

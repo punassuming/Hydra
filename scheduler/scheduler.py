@@ -35,7 +35,10 @@ def _json_ready(value):
 
 
 def _resolve_credential_refs(job: dict, db) -> dict:
-    """If the job's executor uses credential_ref, resolve it to connection_uri.
+    """If the job's executor or source uses credential_ref, resolve it.
+
+    For SQL executors: resolves credential_ref to connection_uri.
+    For git sources: resolves credential_ref to a token injected into the source.
 
     This injects decrypted credentials into the job dict so the worker
     (which is Redis-only and has no access to MongoDB) can connect.
@@ -43,49 +46,61 @@ def _resolve_credential_refs(job: dict, db) -> dict:
     Credentials are domain-scoped: only credentials belonging to the
     same domain as the job are resolved.
     """
-    executor = job.get("executor") or {}
-    if executor.get("type") != "sql":
-        return job
-    credential_ref = (executor.get("credential_ref") or "").strip()
-    if not credential_ref:
-        return job
-    # Already has inline connection_uri — nothing to resolve
-    if (executor.get("connection_uri") or "").strip():
-        return job
     job_domain = job.get("domain", "prod")
-    cred_doc = db.credentials.find_one({"name": credential_ref, "domain": job_domain})
-    if not cred_doc:
-        log.warning("credential_ref '%s' not found for job %s in domain %s", credential_ref, job.get("_id"), job_domain)
-        return job
-    try:
-        decrypted = decrypt_payload(cred_doc["encrypted_payload"])
-    except Exception:
-        log.exception("Failed to decrypt credential '%s' for job %s", credential_ref, job.get("_id"))
-        return job
-    # Build connection_uri from decrypted payload
-    resolved_uri = decrypted.get("connection_uri") or ""
-    if not resolved_uri and decrypted.get("host"):
-        # Construct URI from discrete fields when connection_uri wasn't stored
-        dialect = executor.get("dialect", "postgres")
-        user = decrypted.get("username", "")
-        password = decrypted.get("password", "")
-        host = decrypted.get("host", "localhost")
-        port = decrypted.get("port", "")
-        database = decrypted.get("database") or executor.get("database", "")
-        auth = f"{user}:{password}@" if user else ""
-        port_part = f":{port}" if port else ""
-        db_part = f"/{database}" if database else ""
-        dialect_map = {
-            "postgres": "postgresql",
-            "mysql": "mysql+pymysql",
-            "mssql": "mssql+pyodbc",
-            "oracle": "oracle+cx_oracle",
-            "mongodb": "mongodb",
-        }
-        scheme = dialect_map.get(dialect, dialect)
-        resolved_uri = f"{scheme}://{auth}{host}{port_part}{db_part}"
-    if resolved_uri:
-        job = {**job, "executor": {**executor, "connection_uri": resolved_uri}}
+
+    # Resolve SQL executor credential_ref
+    executor = job.get("executor") or {}
+    if executor.get("type") == "sql":
+        credential_ref = (executor.get("credential_ref") or "").strip()
+        if credential_ref and not (executor.get("connection_uri") or "").strip():
+            cred_doc = db.credentials.find_one({"name": credential_ref, "domain": job_domain})
+            if not cred_doc:
+                log.warning("credential_ref '%s' not found for job %s in domain %s", credential_ref, job.get("_id"), job_domain)
+            else:
+                try:
+                    decrypted = decrypt_payload(cred_doc["encrypted_payload"])
+                    # Build connection_uri from decrypted payload
+                    resolved_uri = decrypted.get("connection_uri") or ""
+                    if not resolved_uri and decrypted.get("host"):
+                        dialect = executor.get("dialect", "postgres")
+                        user = decrypted.get("username", "")
+                        password = decrypted.get("password", "")
+                        host = decrypted.get("host", "localhost")
+                        port = decrypted.get("port", "")
+                        database = decrypted.get("database") or executor.get("database", "")
+                        auth = f"{user}:{password}@" if user else ""
+                        port_part = f":{port}" if port else ""
+                        db_part = f"/{database}" if database else ""
+                        dialect_map = {
+                            "postgres": "postgresql",
+                            "mysql": "mysql+pymysql",
+                            "mssql": "mssql+pyodbc",
+                            "oracle": "oracle+cx_oracle",
+                            "mongodb": "mongodb",
+                        }
+                        scheme = dialect_map.get(dialect, dialect)
+                        resolved_uri = f"{scheme}://{auth}{host}{port_part}{db_part}"
+                    if resolved_uri:
+                        job = {**job, "executor": {**executor, "connection_uri": resolved_uri}}
+                except Exception:
+                    log.exception("Failed to decrypt credential '%s' for job %s", credential_ref, job.get("_id"))
+
+    # Resolve source credential_ref (git PAT)
+    source = job.get("source") or {}
+    src_credential_ref = (source.get("credential_ref") or "").strip()
+    if src_credential_ref and not source.get("token"):
+        cred_doc = db.credentials.find_one({"name": src_credential_ref, "domain": job_domain})
+        if not cred_doc:
+            log.warning("source credential_ref '%s' not found for job %s in domain %s", src_credential_ref, job.get("_id"), job_domain)
+        else:
+            try:
+                decrypted = decrypt_payload(cred_doc["encrypted_payload"])
+                token = decrypted.get("token") or decrypted.get("password") or ""
+                if token:
+                    job = {**job, "source": {**source, "token": token}}
+            except Exception:
+                log.exception("Failed to decrypt source credential '%s' for job %s", src_credential_ref, job.get("_id"))
+
     return job
 
 

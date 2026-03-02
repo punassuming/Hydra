@@ -106,12 +106,21 @@ export interface CompletionCriteria {
   stderr_not_contains: string[];
 }
 
+export interface SourceConfig {
+  protocol?: "git";
+  url: string;
+  ref?: string;
+  path?: string | null;
+  credential_ref?: string | null;
+}
+
 export interface JobDefinition {
   _id: string;
   name: string;
   user: string;
   domain?: string;
   bypass_concurrency?: boolean;
+  source?: SourceConfig | null;
   priority: number;
   affinity: Affinity;
   executor: Executor;

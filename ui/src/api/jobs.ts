@@ -13,6 +13,7 @@ import {
   WorkerMetricsData,
   WorkerTimelineData,
   WorkerOperationsData,
+  SourceConfig,
 } from "../types";
 
 export interface JobPayload {
@@ -24,6 +25,7 @@ export interface JobPayload {
   retries: number;
   timeout: number;
   bypass_concurrency?: boolean;
+  source?: SourceConfig | null;
   schedule: ScheduleConfig;
   completion: CompletionCriteria;
   tags?: string[];

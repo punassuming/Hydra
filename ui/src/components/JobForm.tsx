@@ -15,7 +15,7 @@ import {
   Typography,
   Steps,
 } from "antd";
-import { JobDefinition, PythonEnvironment } from "../types";
+import { JobDefinition, PythonEnvironment, SourceConfig } from "../types";
 import { JobPayload, ValidationResult, fetchWorkers, fetchJobs, generateJob } from "../api/jobs";
 import { useActiveDomain } from "../context/ActiveDomainContext";
 
@@ -62,6 +62,7 @@ const createDefaultPayload = (): JobPayload => ({
   retries: 0,
   timeout: 30,
   bypass_concurrency: false,
+  source: null,
   schedule: {
     mode: "immediate",
     enabled: true,
@@ -234,6 +235,7 @@ export function JobForm({
         bypass_concurrency: selectedJob.bypass_concurrency ?? false,
         // queue removed
         priority: (selectedJob as any).priority ?? 5,
+        source: selectedJob.source ?? null,
         schedule: { ...createDefaultPayload().schedule, ...(selectedJob.schedule ?? {}) },
         completion: { ...createDefaultPayload().completion, ...(selectedJob.completion ?? {}) },
         tags: selectedJob.tags ?? [],
@@ -293,6 +295,13 @@ export function JobForm({
     setPayload((prev) => ({ ...prev, completion: { ...prev.completion, ...update } }));
   };
 
+  const updateSource = (update: Partial<SourceConfig> | null) => {
+    setPayload((prev) => {
+      if (update === null) return { ...prev, source: null };
+      return { ...prev, source: { ...(prev.source ?? { url: "", ref: "main" }), ...update } };
+    });
+  };
+
   const updatePythonEnv = (update: Partial<PythonEnvironment>) => {
     if (executor.type !== "python") {
       return;
@@ -341,6 +350,8 @@ export function JobForm({
     const normalized: JobPayload = {
       ...source,
       user: source.user?.trim() || "default",
+      // Null-out source if URL is blank
+      source: source.source?.url?.trim() ? source.source : null,
       schedule: {
         ...source.schedule,
         mode: formScheduleMode === "dependency" ? "immediate" : source.schedule.mode,
@@ -831,6 +842,70 @@ export function JobForm({
             <Typography.Text type="secondary">
               Linux workers only. If `impersonate_user` is set, worker runs command as `sudo -n -u &lt;user&gt;` and runs `kinit -kt` before job execution when Kerberos fields are provided.
             </Typography.Text>
+            <Divider>Git Source (optional)</Divider>
+            <Row gutter={16} align="middle">
+              <Col xs={24} md={12}>
+                <Form.Item label="Enable Git Source">
+                  <Switch
+                    checked={!!payload.source}
+                    onChange={(checked) => updateSource(checked ? { url: "", ref: "main" } : null)}
+                  />
+                  <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
+                    Clone a git repository before running the job
+                  </Typography.Text>
+                </Form.Item>
+              </Col>
+            </Row>
+            {payload.source && (
+              <>
+                <Row gutter={16}>
+                  <Col xs={24} md={12}>
+                    <Form.Item label="Repository URL" required>
+                      <Input
+                        value={payload.source.url ?? ""}
+                        onChange={(e) => updateSource({ url: e.target.value })}
+                        placeholder="https://github.com/user/repo.git"
+                      />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Form.Item label="Branch / Tag / Ref">
+                      <Input
+                        value={payload.source.ref ?? "main"}
+                        onChange={(e) => updateSource({ ref: e.target.value || "main" })}
+                        placeholder="main"
+                      />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Form.Item label="Sub-directory (optional)">
+                      <Input
+                        value={payload.source.path ?? ""}
+                        onChange={(e) => updateSource({ path: e.target.value || null })}
+                        placeholder="scripts/jobs"
+                      />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <Row gutter={16}>
+                  <Col xs={24} md={12}>
+                    <Form.Item label="Credential Reference (PAT)">
+                      <Input
+                        value={payload.source.credential_ref ?? ""}
+                        onChange={(e) => updateSource({ credential_ref: e.target.value || null })}
+                        placeholder="stored credential name for private repos (optional)"
+                      />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <Alert
+                  type="info"
+                  showIcon
+                  message="The worker will shallow-clone the repository into a temporary directory before execution, then clean it up afterwards. Store a personal access token via Admin > Credentials and reference it here for private repositories."
+                  style={{ marginBottom: 12 }}
+                />
+              </>
+            )}
           </>
         );
       case "schedule":
