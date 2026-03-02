@@ -3,13 +3,14 @@ import json
 from enum import Enum
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import google.generativeai as genai
 import openai
 from ..models.job_definition import JobCreate
 from ..mongo_client import get_db
 
 router = APIRouter(prefix="/ai", tags=["AI"])
+MAX_PREDICTION_SAMPLE_SIZE = 200  # Cap query size to keep estimation requests fast.
 
 class AIProvider(str, Enum):
     GEMINI = "gemini"
@@ -39,7 +40,7 @@ class AnalyzeRequest(BaseModel):
 
 class PredictDurationRequest(BaseModel):
     job_id: str
-    sample_size: int = 20
+    sample_size: int = Field(default=20, ge=1, le=MAX_PREDICTION_SAMPLE_SIZE)
     domain: Optional[str] = None
 
 SYSTEM_PROMPT_JOB = """
@@ -219,14 +220,14 @@ def _percentile(sorted_values, p: float) -> Optional[float]:
 @router.post("/predict_duration")
 async def predict_duration(req: PredictDurationRequest, request: Request):
     db = get_db()
-    sample_size = max(1, min(req.sample_size, 200))
+    sample_size = min(req.sample_size, MAX_PREDICTION_SAMPLE_SIZE)
     domain = getattr(request.state, "domain", "prod")
     is_admin = getattr(request.state, "is_admin", False)
 
     query = {
         "job_id": req.job_id,
         "status": {"$in": ["success", "failed"]},
-        "duration": {"$ne": None},
+        "duration": {"$gte": 0},
     }
     if not is_admin:
         query["domain"] = domain
@@ -234,11 +235,12 @@ async def predict_duration(req: PredictDurationRequest, request: Request):
         query["domain"] = req.domain
 
     runs = list(db.job_runs.find(query).sort("start_ts", -1).limit(sample_size))
-    durations = sorted(
-        float(run["duration"])
-        for run in runs
-        if isinstance(run.get("duration"), (int, float)) and run.get("duration") is not None and run.get("duration") >= 0
-    )
+    durations = []
+    for run in runs:
+        duration = run.get("duration")
+        if isinstance(duration, (int, float)) and duration >= 0:
+            durations.append(float(duration))
+    durations.sort()
     if not durations:
         return {"job_id": req.job_id, "sample_size": 0, "estimated_duration_seconds": None, "p90_duration_seconds": None}
 
@@ -248,7 +250,7 @@ async def predict_duration(req: PredictDurationRequest, request: Request):
     return {
         "job_id": req.job_id,
         "sample_size": len(durations),
-        "estimated_duration_seconds": median_seconds,
+        "estimated_duration_seconds": median_seconds,  # Median estimate is more stable for skewed runtimes.
         "mean_duration_seconds": mean_seconds,
         "p90_duration_seconds": p90_seconds,
     }

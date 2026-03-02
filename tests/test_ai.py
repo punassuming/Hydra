@@ -103,7 +103,7 @@ def test_predict_duration_empty_history():
         def sort(self, *_args, **_kwargs):
             return self
 
-        def limit(self, _n):
+        def limit(self, n):
             return []
 
     class FakeJobRuns:
