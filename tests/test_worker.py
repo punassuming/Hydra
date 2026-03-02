@@ -170,3 +170,54 @@ def test_copy_source_rejects_relative_path():
     with tempfile.TemporaryDirectory() as dest_dir:
         with pytest.raises(ValueError, match="absolute"):
             fetch_copy_source("relative/path", dest_dir)
+
+
+def test_rsync_source_builds_command(monkeypatch):
+    """Verify fetch_rsync_source builds the correct rsync command."""
+    import subprocess
+    from worker.utils.rsync import fetch_rsync_source
+
+    captured = {}
+    def mock_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    fetch_rsync_source("user@host:/data/files", "/tmp/dest")
+    assert captured["cmd"][0] == "rsync"
+    assert "-az" in captured["cmd"]
+    assert "user@host:/data/files/" in captured["cmd"]
+    assert "/tmp/dest/" in captured["cmd"]
+
+
+def test_rsync_source_with_ssh_key(monkeypatch):
+    """Verify SSH key is passed via -e flag when credential_ref_token is provided."""
+    import subprocess
+    from worker.utils.rsync import fetch_rsync_source
+
+    captured = {}
+    def mock_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    fetch_rsync_source("user@host:/data/files", "/tmp/dest", credential_ref_token="/path/to/key")
+    assert any("/path/to/key" in str(c) for c in captured["cmd"])
+
+
+def test_git_sparse_clone_calls(monkeypatch):
+    """Verify that fetch_git_source with sparse_path uses sparse-checkout commands."""
+    import subprocess
+    from worker.utils.git import fetch_git_source
+
+    calls = []
+    def mock_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    fetch_git_source("https://github.com/org/repo.git", "main", "/tmp/dest", sparse_path="services/my-svc")
+    # Should contain git init, git remote add, git sparse-checkout set, git fetch, git checkout
+    cmd_strs = [" ".join(c) for c in calls]
+    assert any("sparse-checkout" in s for s in cmd_strs), f"Expected sparse-checkout in commands: {cmd_strs}"
+    assert any("init" in s for s in cmd_strs), f"Expected git init in commands: {cmd_strs}"

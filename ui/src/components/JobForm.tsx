@@ -861,11 +861,12 @@ export function JobForm({
                     <Select
                       value={payload.source.protocol ?? "git"}
                       onChange={(v) => {
-                        const proto = v as "git" | "copy";
-                        updateSource({ protocol: proto, url: "", ref: proto === "git" ? "main" : "", path: null, credential_ref: null });
+                        const proto = v as "git" | "copy" | "rsync";
+                        updateSource({ protocol: proto, url: "", ref: proto === "git" ? "main" : "", path: null, sparse: false, credential_ref: null });
                       }}
                       options={[
                         { label: "Git clone", value: "git" },
+                        { label: "Remote copy (rsync)", value: "rsync" },
                         { label: "Local copy", value: "copy" },
                       ]}
                     />
@@ -914,11 +915,65 @@ export function JobForm({
                       />
                     </Form.Item>
                   </Col>
+                  <Col xs={24} md={6}>
+                    <Form.Item label="Sparse Checkout">
+                      <Switch
+                        checked={!!payload.source.sparse}
+                        onChange={(checked) => updateSource({ sparse: checked })}
+                      />
+                      <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
+                        Only fetch the sub-directory
+                      </Typography.Text>
+                    </Form.Item>
+                  </Col>
                 </Row>
                 <Alert
                   type="info"
                   showIcon
-                  message="The worker will shallow-clone the repository into a temporary directory before execution, then clean it up afterwards. Store a personal access token via Admin > Credentials and reference it here for private repositories."
+                  message={
+                    payload.source.sparse && payload.source.path
+                      ? "Sparse checkout enabled — only the specified sub-directory will be fetched, reducing clone size for large repositories."
+                      : "The worker will shallow-clone the repository into a temporary directory before execution, then clean it up afterwards. Store a personal access token via Admin > Credentials and reference it here for private repositories."
+                  }
+                  style={{ marginBottom: 12 }}
+                />
+              </>
+            )}
+            {payload.source && payload.source.protocol === "rsync" && (
+              <>
+                <Row gutter={16}>
+                  <Col xs={24} md={12}>
+                    <Form.Item label="Remote Source" required>
+                      <Input
+                        value={payload.source.url ?? ""}
+                        onChange={(e) => updateSource({ url: e.target.value })}
+                        placeholder="user@host:/path/to/source"
+                      />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Form.Item label="Sub-directory (optional)">
+                      <Input
+                        value={payload.source.path ?? ""}
+                        onChange={(e) => updateSource({ path: e.target.value || null })}
+                        placeholder="scripts/jobs"
+                      />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Form.Item label="SSH Key Credential (optional)">
+                      <Input
+                        value={payload.source.credential_ref ?? ""}
+                        onChange={(e) => updateSource({ credential_ref: e.target.value || null })}
+                        placeholder="stored SSH key credential name"
+                      />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <Alert
+                  type="info"
+                  showIcon
+                  message="The worker will rsync files from the remote host over SSH into a temporary directory before execution. Use user@host:/path syntax. For private-key auth, store the key path via Admin > Credentials."
                   style={{ marginBottom: 12 }}
                 />
               </>

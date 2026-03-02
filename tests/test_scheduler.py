@@ -169,3 +169,19 @@ def test_source_config_copy_protocol():
     assert s.protocol == "copy"
     assert s.url == "/opt/jobs/my-project"
     assert s.credential_ref is None  # not needed for local copies
+
+
+def test_source_config_rsync_protocol():
+    from scheduler.models.job_definition import SourceConfig
+    s = SourceConfig(protocol="rsync", url="deploy@build-server:/opt/artifacts/latest")
+    assert s.protocol == "rsync"
+    assert s.url == "deploy@build-server:/opt/artifacts/latest"
+    assert s.sparse is False
+
+
+def test_source_config_git_sparse():
+    from scheduler.models.job_definition import SourceConfig
+    s = SourceConfig(url="https://github.com/org/monorepo.git", path="services/my-svc", sparse=True)
+    assert s.protocol == "git"
+    assert s.sparse is True
+    assert s.path == "services/my-svc"

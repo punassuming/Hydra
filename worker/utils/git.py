@@ -20,28 +20,55 @@ def _inject_token_into_url(url: str, token: str) -> str:
     return urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
 
 
-def fetch_git_source(url: str, ref: str, dest: str, token: str = "") -> None:
+def fetch_git_source(url: str, ref: str, dest: str, token: str = "", sparse_path: str = "") -> None:
     """
     Clones a git repository to the destination directory and checks out the reference.
 
     Uses a shallow clone (--depth 1) when ref looks like a branch/tag name for
     efficiency.  If token is provided it is injected into the HTTPS URL for
     private-repository authentication (personal access token / OAuth token).
+
+    When *sparse_path* is non-empty, a sparse-checkout is used so that only
+    the given sub-tree is materialized on disk.  This dramatically reduces
+    bandwidth and disk usage for large mono-repos when only a small sub-
+    directory is needed.
     """
     clone_url = _inject_token_into_url(url, token) if token else url
 
-    # Attempt a shallow clone first (faster for large repos).  Fall back to a
-    # full clone if the shallow clone fails (e.g. when ref is a commit SHA).
+    if sparse_path:
+        _sparse_clone(clone_url, ref, dest, sparse_path)
+    else:
+        _full_clone(clone_url, ref, dest)
+
+
+def _full_clone(clone_url: str, ref: str, dest: str) -> None:
+    """Standard shallow-then-full clone strategy."""
     cmd_shallow = ["git", "clone", "-q", "--depth", "1", clone_url, dest]
     result = subprocess.run(cmd_shallow, capture_output=True)
     if result.returncode != 0:
-        # Remove any partial clone before retrying
         shutil.rmtree(dest, ignore_errors=True)
         os.makedirs(dest, exist_ok=True)
         cmd_clone = ["git", "clone", "-q", clone_url, dest]
         subprocess.run(cmd_clone, check=True)
 
-    # Checkout the requested ref
     if ref:
-        cmd_checkout = ["git", "checkout", ref]
-        subprocess.run(cmd_checkout, cwd=dest, check=True)
+        subprocess.run(["git", "checkout", ref], cwd=dest, check=True)
+
+
+def _sparse_clone(clone_url: str, ref: str, dest: str, sparse_path: str) -> None:
+    """Clone using sparse-checkout so only *sparse_path* is materialized."""
+    os.makedirs(dest, exist_ok=True)
+    subprocess.run(["git", "init", "-q", dest], check=True)
+    subprocess.run(["git", "remote", "add", "origin", clone_url], cwd=dest, check=True)
+    # Enable cone-mode sparse-checkout (fast, directory-level filtering)
+    subprocess.run(
+        ["git", "sparse-checkout", "set", "--cone", sparse_path],
+        cwd=dest, check=True,
+    )
+    # Attempt shallow fetch first; fall back to full fetch
+    fetch_cmd = ["git", "fetch", "-q", "--depth", "1", "origin", ref or "HEAD"]
+    result = subprocess.run(fetch_cmd, cwd=dest, capture_output=True)
+    if result.returncode != 0:
+        fetch_cmd_full = ["git", "fetch", "-q", "origin", ref or "HEAD"]
+        subprocess.run(fetch_cmd_full, cwd=dest, check=True)
+    subprocess.run(["git", "checkout", ref or "FETCH_HEAD"], cwd=dest, check=True)

@@ -107,10 +107,11 @@ export interface CompletionCriteria {
 }
 
 export interface SourceConfig {
-  protocol?: "git" | "copy";
+  protocol?: "git" | "copy" | "rsync";
   url: string;
   ref?: string;
   path?: string | null;
+  sparse?: boolean;
   credential_ref?: string | null;
 }
 

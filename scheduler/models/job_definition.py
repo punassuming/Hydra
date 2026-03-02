@@ -51,10 +51,11 @@ class CompletionCriteria(BaseModel):
 
 
 class SourceConfig(BaseModel):
-    protocol: Literal["git", "copy"] = "git"
-    url: str  # git remote URL for "git" protocol; local filesystem path for "copy" protocol
-    ref: str = "main"  # git only; ignored for "copy" protocol
+    protocol: Literal["git", "copy", "rsync"] = "git"
+    url: str  # git remote URL for "git"; local path for "copy"; remote host:path for "rsync"
+    ref: str = "main"  # git only; ignored for other protocols
     path: Optional[str] = None
+    sparse: bool = False  # git only; use sparse-checkout to fetch only 'path' subtree
     credential_ref: Optional[str] = None
 
 
