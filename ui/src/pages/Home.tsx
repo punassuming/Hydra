@@ -1,18 +1,14 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Row, Col, Card, Typography, Space, Button, Modal, Divider, Tabs } from "antd";
+import { Row, Col, Card, Typography, Space, Button, Modal, Divider } from "antd";
 import { JobForm } from "../components/JobForm";
 import { JobList } from "../components/JobList";
 import { JobRuns } from "../components/JobRuns";
 import { EventsFeed } from "../components/EventsFeed";
-import { JobOverview } from "../components/JobOverview";
-import { JobStatistics } from "../components/JobStatistics";
 import { useSchedulerEvents } from "../hooks/useEvents";
 import { createJob, fetchJobs, JobPayload, runAdhocJob, runJobNow, updateJob, validateJob } from "../api/jobs";
-import { WorkersMini } from "../components/WorkersMini";
 import { useActiveDomain } from "../context/ActiveDomainContext";
 import { JobsDashboard } from "../components/JobsDashboard";
-import { DashboardOutlined, UnorderedListOutlined } from "@ant-design/icons";
 
 export function HomePage() {
   const queryClient = useQueryClient();
@@ -150,47 +146,17 @@ export function HomePage() {
         )}
       </Card>
 
-      <Tabs
-        defaultActiveKey="dashboard"
-        items={[
-          {
-            key: "dashboard",
-            label: (
-              <span>
-                <DashboardOutlined /> Dashboard
-              </span>
-            ),
-            children: <JobsDashboard />,
-          },
-          {
-            key: "jobs",
-            label: (
-              <span>
-                <UnorderedListOutlined /> Jobs List
-              </span>
-            ),
-            children: (
-              <Space direction="vertical" size="large" style={{ width: "100%" }}>
-                <Card id="job-list" title="Jobs">
-                  <JobList
-                    jobs={jobs}
-                    loading={jobsQuery.isLoading}
-                    selectedId={selectedJobId}
-                    onSelect={(job) => setSelectedJobId(job._id)}
-                    onEdit={() => setModalVisible(true)}
-                  />
-                </Card>
+      <JobsDashboard />
 
-                <JobStatistics />
-
-                <JobOverview />
-
-                <WorkersMini />
-              </Space>
-            ),
-          },
-        ]}
-      />
+      <Card id="job-list" title="Jobs">
+        <JobList
+          jobs={jobs}
+          loading={jobsQuery.isLoading}
+          selectedId={selectedJobId}
+          onSelect={(job) => setSelectedJobId(job._id)}
+          onEdit={() => setModalVisible(true)}
+        />
+      </Card>
 
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>

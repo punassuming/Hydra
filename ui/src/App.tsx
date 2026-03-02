@@ -2,12 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Layout, Typography, Space, Segmented, Button } from "antd";
 import { Routes, Route, useLocation, useNavigate } from "react-router-dom";
 import { ConfigProvider, theme } from "antd";
-import { MoonOutlined, SunOutlined, SettingOutlined } from "@ant-design/icons";
+import { MoonOutlined, SunOutlined } from "@ant-design/icons";
 import { HomePage } from "./pages/Home";
-import { BrowsePage } from "./pages/Browse";
 import { JobDetailPage } from "./pages/JobDetail";
-import { HistoryPage } from "./pages/History";
-import { StatusPage } from "./pages/Status";
+import { ObservePage } from "./pages/Observe";
 import { WorkersPage } from "./pages/Workers";
 import { AdminPage } from "./pages/Admin";
 import { HydraLogo } from "./components/HydraLogo";
@@ -66,11 +64,9 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
   const navItems = useMemo(
     () => {
       const items = [
-        { value: "jobs", label: "Jobs", path: "/" },
-        { value: "browse", label: "Browse", path: "/browse" },
+        { value: "operate", label: "Operate", path: "/" },
+        { value: "observe", label: "Observe", path: "/observe" },
         { value: "workers", label: "Workers", path: "/workers" },
-        { value: "status", label: "Status", path: "/status" },
-        { value: "history", label: "History", path: "/history" },
       ];
       if (isAdmin) {
         items.push({ value: "admin", label: "Admin", path: "/admin" });
@@ -80,12 +76,10 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
     [isAdmin],
   );
   const currentNav = useMemo(() => {
-    if (location.pathname.startsWith("/browse")) return "browse";
+    if (location.pathname.startsWith("/observe")) return "observe";
     if (location.pathname.startsWith("/workers")) return "workers";
-    if (location.pathname.startsWith("/status")) return "status";
-    if (location.pathname.startsWith("/history")) return "history";
     if (location.pathname.startsWith("/admin")) return "admin";
-    return "jobs";
+    return "operate";
   }, [location.pathname]);
 
   if (authOpen) {
@@ -189,11 +183,6 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
                 >
                   {darkMode ? "Light" : "Dark"}
                 </Button>
-                {isAdmin && (
-                  <Button icon={<SettingOutlined />} type={location.pathname.startsWith("/admin") ? "primary" : "default"} onClick={() => navigate("/admin")}>
-                    Admin
-                  </Button>
-                )}
                 <HeaderSettings />
               </Space>
             </Space>
@@ -208,12 +197,7 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
         >
           <Routes>
             <Route path="/" element={<HomePage />} />
-            <Route path="/status" element={<StatusPage />} />
-            <Route path="/history" element={<HistoryPage />} />
-            <Route
-              path="/browse"
-              element={<BrowsePage />}
-            />
+            <Route path="/observe" element={<ObservePage />} />
             <Route path="/workers" element={<WorkersPage />} />
             <Route path="/workers/:workerId" element={<WorkerDetailPage />} />
             <Route

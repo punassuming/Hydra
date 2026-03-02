@@ -82,7 +82,8 @@ describe("App navigation and routing", () => {
     renderWithProviders(<App />);
     expect(screen.getByText("Operate")).toBeInTheDocument();
     expect(screen.getByText("Observe")).toBeInTheDocument();
-    expect(screen.getByText(/Domain: prod/i)).toBeInTheDocument();
+    const domainEls = screen.getAllByText((_content, element) => element?.textContent === "Domain: prod");
+    expect(domainEls.length).toBeGreaterThan(0);
   });
 
   it("routes to worker detail and allows state changes", async () => {
