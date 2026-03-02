@@ -97,7 +97,7 @@ export function JobsDashboard() {
             <Typography.Text strong>Recently Failed Jobs</Typography.Text>
           </Space>
         }
-        extra={<Link to="/history">View All History</Link>}
+        extra={<Link to="/observe">View All History</Link>}
         loading={historyQuery.isLoading}
       >
         {failedJobRuns.length > 0 ? (
