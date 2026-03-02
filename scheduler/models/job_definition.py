@@ -66,6 +66,10 @@ class JobDefinition(BaseModel):
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     completion: CompletionCriteria = Field(default_factory=CompletionCriteria)
     tags: List[str] = Field(default_factory=list)
+    depends_on: List[str] = Field(default_factory=list)
+    max_retries: int = 0
+    retry_delay_seconds: int = 0
+    on_failure_webhooks: List[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -93,6 +97,10 @@ class JobCreate(BaseModel):
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     completion: CompletionCriteria = Field(default_factory=CompletionCriteria)
     tags: List[str] = Field(default_factory=list)
+    depends_on: List[str] = Field(default_factory=list)
+    max_retries: int = 0
+    retry_delay_seconds: int = 0
+    on_failure_webhooks: List[str] = Field(default_factory=list)
 
 
 class JobUpdate(BaseModel):
@@ -109,6 +117,10 @@ class JobUpdate(BaseModel):
     schedule: Optional[ScheduleConfig] = None
     completion: Optional[CompletionCriteria] = None
     tags: Optional[List[str]] = None
+    depends_on: Optional[List[str]] = None
+    max_retries: Optional[int] = None
+    retry_delay_seconds: Optional[int] = None
+    on_failure_webhooks: Optional[List[str]] = None
 
 
 class JobValidationResult(BaseModel):

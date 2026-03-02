@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Table, Modal, Typography, Space, Divider } from "antd";
+import { Table, Modal, Typography, Space, Divider, Button } from "antd";
 import { JobRun } from "../types";
 import { fetchJobRuns } from "../api/jobs";
 import { useEffect, useState } from "react";
@@ -14,9 +14,10 @@ interface Props {
   jobId?: string | null;
   runs?: JobRun[];
   loading?: boolean;
+  onKillRun?: (runId: string) => void;
 }
 
-export function JobRuns({ jobId, runs: providedRuns, loading }: Props) {
+export function JobRuns({ jobId, runs: providedRuns, loading, onKillRun }: Props) {
   const { domain } = useActiveDomain();
   const enabled = Boolean(jobId);
   const shouldQuery = !providedRuns && enabled;
@@ -111,9 +112,14 @@ export function JobRuns({ jobId, runs: providedRuns, loading }: Props) {
     { title: "Reason", dataIndex: "completion_reason", key: "completion_reason" },
     {
       title: "",
-      key: "logs",
+      key: "actions",
       render: (_: unknown, record: any) => (
-        <Typography.Link onClick={() => setLogModal({ visible: true, run: record })}>View Logs</Typography.Link>
+        <Space>
+          <Typography.Link onClick={() => setLogModal({ visible: true, run: record })}>View Logs</Typography.Link>
+          {record.status === "running" && onKillRun && (
+            <Button size="small" danger onClick={() => onKillRun(record._id)}>Stop</Button>
+          )}
+        </Space>
       ),
     },
   ];

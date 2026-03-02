@@ -26,23 +26,33 @@ Hydra Jobs is a distributed job runner designed for flexibility and scalability.
 ## Workflow & Architecture (Internal Details)
 
 - Scheduler (`scheduler/`) runs four background loops: `scheduling_loop` dispatches jobs from `job_queue:<domain>:pending` to `job_queue:<domain>:<worker_id>`, `failover_loop` requeues jobs from offline workers, `schedule_trigger_loop` advances cron/interval jobs, and `run_event_loop` consumes `run_events:<domain>` from Redis and persists run docs in Mongo.
-- Scheduler admin API can provision domain-scoped Redis ACL worker users (`/admin/domains/{domain}/redis_acl/rotate`) and returns `REDIS_USERNAME` + `REDIS_PASSWORD` for worker startup.
+- Scheduler admin API can provision domain-scoped Redis ACL worker access (`/admin/domains/{domain}/redis_acl/rotate`) and returns credentials for that domain; workers use `DOMAIN` as Redis username and `REDIS_PASSWORD` as secret.
+- Worker Redis ACL username is the domain name itself (legacy hashed usernames are cleaned up on rotation/delete).
 - Scheduler worker APIs include:
   - `GET /workers/` with runtime + 30m metrics summary (memory/process/load), running jobs/users, plus clear `connectivity_status` and `dispatch_status`.
   - `GET /workers/{worker_id}/metrics` for time-series points.
   - `GET /workers/{worker_id}/timeline` for per-worker execution spans (for Gantt/timeline UI).
   - `GET /workers/{worker_id}/operations` for operational timeline events (start/restart/dispatch/run lifecycle/state changes/failover).
   - `POST /workers/{worker_id}/state` with JSON body `{ "state": "online|draining|offline" }` (`disabled` accepted as legacy alias).
+- Scheduler domain self-service APIs (domain token or admin token scoped by `domain`):
+  - `GET /domain/settings`, `PUT /domain/settings`
+  - `POST /domain/token/rotate`
+  - `POST /domain/redis_acl/rotate`
+- Domain credential APIs for non-admin users:
+  - `GET /credentials/`, `POST /credentials/`, `PUT /credentials/{name}`, `DELETE /credentials/{name}`
 - Worker (`worker/`) registers itself in Redis with tags/allowed users/domain token hash, heartbeats every 2s, BLPOPs its queue, tracks `current_running`/`worker_running_set`, streams logs to Redis (per-domain channels), emits run events to `run_events:<domain>`, and records worker operations to `worker_ops:<domain>:<worker_id>`.
 - Worker no longer mutates global domain registry keys; worker Redis writes are domain-scoped to heartbeat/status/queue/log keys.
 - Worker heartbeat stores rolling metrics in Redis (`worker_metrics:<domain>:<worker_id>:history`) including `memory_rss_mb`, `process_count`, and Linux load averages.
 - Jobs support `bypass_concurrency`; scheduler can dispatch these even when workers are at quota, and workers execute them outside normal `ThreadPoolExecutor` limits.
 - Executors support Linux-only impersonation and Kerberos bootstrap: `executor.impersonate_user` and `executor.kerberos.{principal,keytab,ccache}`.
 - Domains: default `prod` is seeded on scheduler startup; additional domains live in Mongo (`domains` collection) with token hashes cached in Redis. Admin token bypasses domain scoping; domain tokens scope all other requests.
+- Domain naming is strict in admin APIs: `2-63` chars, lowercase letters/numbers with optional `_`/`-`, and must start/end with alphanumeric.
 - UI (`ui/`) consumes the scheduler API/SSE for jobs, workers, history, and log streaming. Docker Compose builds and serves it on port 5173; adjust `VITE_API_BASE_URL` as needed.
 - UI auth/UX notes:
   - Login gate: when unauthenticated, only the auth modal/screen is shown.
+  - Auth modal clearly separates `Domain Token` and `Admin Token` sign-in modes; admin mode no longer asks for a domain in the same step.
   - Header has tabbed nav (including Admin), persistent dark/light toggle, and a Settings drawer for domain/token/admin actions.
+  - Admin page is also used for domain self-service when logged in with a domain token (domain settings + credentials for active domain).
   - Worker detail page includes metrics trend plotting + concurrency-lane timeline/Gantt + operational event timeline.
   - Logs view supports search/highlight, parsed/raw modes, expansion, and copy actions.
   - AI log helper supports multiple analysis modes (failure fix, summary, error extraction, retry tuning, custom question).
@@ -102,12 +112,12 @@ The services will be available at:
 Workers can be run independently to scale processing power.
 
 ```bash
-API_TOKEN=<domain_token> WORKER_DOMAIN=prod \
-REDIS_URL=redis://localhost:6379/0 REDIS_USERNAME=<acl_user> REDIS_PASSWORD=<acl_password> \
+API_TOKEN=<domain_token> DOMAIN=prod \
+REDIS_URL=redis://localhost:6379/0 REDIS_PASSWORD=<acl_password> \
 docker compose -f docker-compose.worker.yml up --build
 
 # Scale workers (WORKER_ID defaults to auto-generated unique IDs)
-API_TOKEN=<domain_token> WORKER_DOMAIN=prod \
+API_TOKEN=<domain_token> DOMAIN=prod \
 docker compose -f docker-compose.worker.yml up --build --scale worker=2
 ```
 
@@ -130,6 +140,8 @@ Located in `scripts/`:
 *   `create-domain.sh`: Creates a new domain via the API.
 *   `provision-redis-acl.sh`: Rotates/provisions domain worker Redis ACL credentials via admin API.
 *   `configure-external-redis-acl.sh`: Configures domain worker ACL user directly on an external Redis server via `redis-cli`.
+*   `start-domain-workers.sh`: Agentic worker bring-up for Docker/Kubernetes/Bare deployments.
+*   `diagnose-domain-admin.sh`: Agentic diagnostics for domain auth and worker visibility (with optional Redis deep checks).
 
 ## Testing
 
@@ -170,9 +182,9 @@ Located in `scripts/`:
 
 ### Worker Environment Variables
 
-- `WORKER_DOMAIN` — Domain the worker belongs to
-- `WORKER_DOMAIN_TOKEN` (or `API_TOKEN`) — Authentication token for the worker
-- `REDIS_USERNAME` / `REDIS_PASSWORD` — Recommended domain-scoped worker Redis ACL credentials
+- `DOMAIN` — Domain the worker belongs to
+- `API_TOKEN` — Authentication token for the worker
+- `REDIS_PASSWORD` — Domain-scoped worker Redis ACL password (Redis username is derived from `DOMAIN`)
 - `WORKER_ID` — Unique worker identifier
 - `WORKER_TAGS` — Tags for worker affinity
 - `ALLOWED_USERS` — Users allowed to submit jobs to this worker

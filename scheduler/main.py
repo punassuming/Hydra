@@ -13,8 +13,9 @@ from .api.history import router as history_router
 from .api.logs import router as logs_router
 from .api.admin import router as admin_router
 from .api.credentials import router as credentials_router
+from .api.domain import router as domain_router
 from .api.ai import router as ai_router
-from .scheduler import scheduling_loop, failover_loop, schedule_trigger_loop
+from .scheduler import scheduling_loop, failover_loop, schedule_trigger_loop, timeout_enforcement_loop
 from .run_events import run_event_loop
 from .utils.logging import setup_logging
 from .utils.auth import enforce_api_key
@@ -47,6 +48,7 @@ app.include_router(history_router)
 app.include_router(logs_router)
 app.include_router(admin_router)
 app.include_router(credentials_router)
+app.include_router(domain_router)
 app.include_router(ai_router)
 
 stop_event = threading.Event()
@@ -100,10 +102,12 @@ def on_startup():
     app.state.failover_thread = threading.Thread(target=failover_loop, args=(stop_event,), daemon=True)
     app.state.schedule_thread = threading.Thread(target=schedule_trigger_loop, args=(stop_event,), daemon=True)
     app.state.run_event_thread = threading.Thread(target=run_event_loop, args=(stop_event,), daemon=True)
+    app.state.timeout_thread = threading.Thread(target=timeout_enforcement_loop, args=(stop_event,), daemon=True)
     app.state.scheduler_thread.start()
     app.state.failover_thread.start()
     app.state.schedule_thread.start()
     app.state.run_event_thread.start()
+    app.state.timeout_thread.start()
 
 
 @app.on_event("shutdown")
@@ -114,6 +118,7 @@ def on_shutdown():
     th2 = getattr(app.state, "failover_thread", None)
     th3 = getattr(app.state, "schedule_thread", None)
     th4 = getattr(app.state, "run_event_thread", None)
+    th5 = getattr(app.state, "timeout_thread", None)
     if th1:
         th1.join(timeout=2)
     if th2:
@@ -122,3 +127,5 @@ def on_shutdown():
         th3.join(timeout=2)
     if th4:
         th4.join(timeout=2)
+    if th5:
+        th5.join(timeout=2)

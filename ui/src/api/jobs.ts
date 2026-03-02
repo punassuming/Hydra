@@ -27,6 +27,10 @@ export interface JobPayload {
   schedule: ScheduleConfig;
   completion: CompletionCriteria;
   tags?: string[];
+  depends_on?: string[];
+  max_retries?: number;
+  retry_delay_seconds?: number;
+  on_failure_webhooks?: string[];
 }
 
 export interface ValidationResult {
@@ -62,7 +66,9 @@ export const updateJob = (jobId: string, payload: Partial<JobPayload>) =>
   apiClient.put<JobDefinition>(`/jobs/${jobId}`, payload);
 export const validateJob = (payload: JobPayload) => apiClient.post<ValidationResult>("/jobs/validate", payload);
 export const validateJobById = (jobId: string) => apiClient.post<ValidationResult>(`/jobs/${jobId}/validate`, {});
-export const runJobNow = (jobId: string) => apiClient.post<{ job_id: string; queued: boolean }>(`/jobs/${jobId}/run`, {});
+export const runJobNow = (jobId: string, params?: Record<string, string>) =>
+  apiClient.post<{ job_id: string; queued: boolean }>(`/jobs/${jobId}/run`, { params: params ?? {} });
+export const killRun = (runId: string) => apiClient.post<{ run_id: string; signal: string }>(`/runs/${runId}/kill`, {});
 export const runAdhocJob = (payload: JobPayload) => apiClient.post<JobDefinition>("/jobs/adhoc", payload);
 
 export const generateJob = (prompt: string, provider: "gemini" | "openai" = "gemini", model?: string) => 

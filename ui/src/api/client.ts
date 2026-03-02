@@ -4,6 +4,7 @@ type TokenMap = Record<string, string>;
 
 const TOKEN_MAP_KEY = "hydra_token_map";
 const ACTIVE_DOMAIN_KEY = "hydra_domain";
+const TOKEN_PREFERENCE_KEY = "hydra_token_preference";
 export const AUTH_REQUIRED_EVENT = "hydra-auth-required";
 
 function readTokenMap(): TokenMap {
@@ -23,6 +24,10 @@ export function setTokenForDomain(domain: string, token: string) {
   const map = readTokenMap();
   map[domain] = token;
   writeTokenMap(map);
+}
+
+export function setTokenPreference(preference: "domain" | "admin") {
+  localStorage.setItem(TOKEN_PREFERENCE_KEY, preference);
 }
 
 export function getTokenForDomain(domain: string): string | undefined {
@@ -49,12 +54,16 @@ export function hasAuthContext(domain?: string): boolean {
 export function forgetToken(domain?: string) {
   if (!domain) {
     localStorage.removeItem(TOKEN_MAP_KEY);
+    localStorage.removeItem(TOKEN_PREFERENCE_KEY);
     window.dispatchEvent(new CustomEvent(AUTH_REQUIRED_EVENT));
     return;
   }
   const map = readTokenMap();
   delete map[domain];
   writeTokenMap(map);
+  if (domain === "admin" && localStorage.getItem(TOKEN_PREFERENCE_KEY) === "admin") {
+    localStorage.setItem(TOKEN_PREFERENCE_KEY, "domain");
+  }
   if (Object.keys(map).length === 0) {
     window.dispatchEvent(new CustomEvent(AUTH_REQUIRED_EVENT));
   }
@@ -75,6 +84,10 @@ type TokenContext =
 export function getTokenContext(domain?: string): TokenContext {
   const map = readTokenMap();
   const activeDomain = domain || getActiveDomain();
+  const tokenPreference = localStorage.getItem(TOKEN_PREFERENCE_KEY);
+  if (tokenPreference === "admin" && map["admin"]) {
+    return { token: map["admin"], activeDomain, source: "admin" };
+  }
   if (map[activeDomain]) {
     return { token: map[activeDomain], activeDomain, source: "domain" };
   }
@@ -147,6 +160,32 @@ export const apiClient = {
       method: "DELETE",
     }),
 };
+
+async function requestWithExplicitToken(path: string, token: string, domain?: string): Promise<Response> {
+  const headers = new Headers();
+  headers.set("x-api-key", token);
+  const url = new URL(path, API_BASE);
+  if (domain && !url.searchParams.has("domain")) {
+    url.searchParams.set("domain", domain);
+  }
+  return fetch(url.toString(), { headers });
+}
+
+export async function validateDomainToken(domain: string, token: string): Promise<void> {
+  const res = await requestWithExplicitToken("/jobs/", token, domain);
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail?.detail ?? "Invalid domain token");
+  }
+}
+
+export async function validateAdminToken(token: string): Promise<void> {
+  const res = await requestWithExplicitToken("/admin/domains", token);
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail?.detail ?? "Invalid admin token");
+  }
+}
 
 export const streamUrl = () => {
   const { token, activeDomain } = getTokenContext();

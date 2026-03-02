@@ -7,11 +7,10 @@ services:
       - .env
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - REDIS_USERNAME=${REDIS_USERNAME:-}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - WORKER_REQUIRE_REDIS_ACL=${WORKER_REQUIRE_REDIS_ACL:-true}
       - WORKER_ID=${WORKER_ID:-}
-      - WORKER_DOMAIN=${WORKER_DOMAIN:-prod}
+      - DOMAIN=${DOMAIN:-prod}
       - API_TOKEN=${API_TOKEN}
       - WORKER_TAGS=${WORKER_TAGS:-}
       - MAX_CONCURRENCY=${MAX_CONCURRENCY:-2}

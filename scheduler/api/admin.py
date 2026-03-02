@@ -2,6 +2,7 @@ from fastapi import APIRouter, Request, HTTPException
 from typing import List, Dict
 import secrets
 import hashlib
+import re
 from datetime import datetime
 from ..redis_client import get_redis
 from ..mongo_client import get_db
@@ -11,6 +12,7 @@ from ..models.credentials import CredentialCreate, CredentialReference
 from ..utils.encryption import encrypt_payload
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+DOMAIN_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])$")
 
 
 def _require_admin(request: Request):
@@ -23,6 +25,21 @@ def _credential_domain(request: Request) -> str:
     domain = getattr(request.state, "domain", "prod")
     force_domain = (request.query_params.get("domain") or "").strip()
     return force_domain or domain
+
+
+def _validated_domain_name(domain: str) -> str:
+    value = (domain or "").strip()
+    if not value:
+        raise HTTPException(status_code=400, detail="domain required")
+    if not DOMAIN_NAME_RE.fullmatch(value):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "invalid domain; use 2-63 chars of lowercase letters, numbers, '_' or '-', "
+                "and start/end with letter or number"
+            ),
+        )
+    return value
 
 
 @router.get("/domains")
@@ -54,9 +71,7 @@ def list_domains(request: Request) -> Dict[str, List[Dict]]:
 @router.post("/domains")
 def create_domain(payload: Dict, request: Request):
     _require_admin(request)
-    domain = (payload.get("domain") or "").strip()
-    if not domain:
-        raise HTTPException(status_code=400, detail="domain required")
+    domain = _validated_domain_name(payload.get("domain") or "")
     display = payload.get("display_name") or domain
     desc = payload.get("description") or ""
     token = payload.get("token") or secrets.token_hex(24)
@@ -81,6 +96,7 @@ def rename_domain(domain: str, payload: Dict, request: Request):
     Lightweight rename updates display metadata only (does not move data).
     """
     _require_admin(request)
+    domain = _validated_domain_name(domain)
     display = payload.get("display_name") or domain
     desc = payload.get("description") or ""
     token = payload.get("token")
@@ -100,6 +116,7 @@ def rename_domain(domain: str, payload: Dict, request: Request):
 @router.post("/domains/{domain}/token")
 def rotate_token(domain: str, request: Request):
     _require_admin(request)
+    domain = _validated_domain_name(domain)
     db = get_db()
     r = get_redis()
     doc = db.domains.find_one({"domain": domain})
@@ -116,6 +133,7 @@ def rotate_token(domain: str, request: Request):
 @router.delete("/domains/{domain}")
 def delete_domain(domain: str, request: Request):
     _require_admin(request)
+    domain = _validated_domain_name(domain)
     db = get_db()
     r = get_redis()
     db.domains.delete_one({"domain": domain})
@@ -132,6 +150,7 @@ def delete_domain(domain: str, request: Request):
 @router.post("/domains/{domain}/redis_acl/rotate")
 def rotate_worker_redis_acl(domain: str, request: Request):
     _require_admin(request)
+    domain = _validated_domain_name(domain)
     db = get_db()
     doc = db.domains.find_one({"domain": domain})
     if not doc:

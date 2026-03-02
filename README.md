@@ -29,10 +29,10 @@ Hydra Jobs is a distributed job runner with:
   - `domain` query/header
 - Admin access uses `ADMIN_TOKEN`
 - Worker auth is always domain-scoped:
-  - `WORKER_DOMAIN=<domain>`
-  - `API_TOKEN` (or `WORKER_DOMAIN_TOKEN`) matching that domain
+  - `DOMAIN=<domain>`
+  - `API_TOKEN` matching that domain
 - Optional (recommended) Redis ACL hardening:
-  - Per-domain worker Redis ACL user/password
+  - Per-domain worker Redis ACL password (`REDIS_PASSWORD`), username derived from `DOMAIN`
   - Key/channel permissions limited to that domain only
 
 ## Quick Start
@@ -56,10 +56,9 @@ Services:
 
 ```bash
 API_TOKEN=<domain_token> \
-WORKER_DOMAIN=prod \
+DOMAIN=prod \
 WORKER_REQUIRE_REDIS_ACL=true \
 REDIS_URL=redis://localhost:6379/0 \
-REDIS_USERNAME=<worker_redis_acl_username> \
 REDIS_PASSWORD=<worker_redis_acl_password> \
 docker compose -f docker-compose.worker.yml up --build --scale worker=2
 ```
@@ -77,7 +76,6 @@ Scheduler and worker support Redis Sentinel:
   - `REDIS_SENTINEL_USERNAME`
   - `REDIS_SENTINEL_PASSWORD`
 - redis auth:
-  - `REDIS_USERNAME`
   - `REDIS_PASSWORD`
 
 If Sentinel vars are not set, `REDIS_URL` is used.
@@ -88,8 +86,14 @@ If Sentinel vars are not set, `REDIS_URL` is used.
   - `scripts/provision-redis-acl.sh`
 - Configure external Redis directly with `redis-cli`:
   - `scripts/configure-external-redis-acl.sh`
+- Agentic worker bring-up (Docker/K8s/Bare):
+  - `scripts/start-domain-workers.sh <domain> [scale]`
+  - Set `WORKER_BACKEND=docker|k8s|bare|print`
+- Agentic domain diagnostics (API + optional Redis deep checks):
+  - `scripts/diagnose-domain-admin.sh <domain>`
+  - Set `REDIS_CHECK_MODE=auto|none|docker|k8s|cli`
 
-Both scripts provision domain-scoped ACLs compatible with worker runtime keys.
+These scripts keep worker auth aligned to `DOMAIN + API_TOKEN + REDIS_PASSWORD` and support domain-scoped ACL operations.
 
 ## Worker Status Semantics
 
@@ -171,9 +175,9 @@ UI Worker Detail includes an operational timeline panel.
   - Set `CORS_ALLOW_ORIGINS` correctly (`comma-separated` or `*`)
   - Ensure scheduler is reachable from UI host
 - Worker unauthorized/offline:
-  - Verify `WORKER_DOMAIN` + `API_TOKEN`
+  - Verify `DOMAIN` + `API_TOKEN`
   - Verify domain token rotation did not invalidate old workers
-  - If ACL required, verify `REDIS_USERNAME`/`REDIS_PASSWORD`
+  - If ACL required, verify `REDIS_PASSWORD`
 - Storage pressure:
   - Low disk can corrupt Mongo startup; recover space before restart
   - Check `docker system df` and prune unused cache/volumes carefully

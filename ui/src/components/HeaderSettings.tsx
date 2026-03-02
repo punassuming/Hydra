@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Button, Checkbox, Divider, Drawer, Input, Modal, Select, Space, Tag, Typography, message } from "antd";
+import { Button, Divider, Drawer, Input, Modal, Select, Space, Tag, Typography, message } from "antd";
 import { SettingOutlined } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
-import { forgetToken, getAdminToken, hasTokenForDomain, setTokenForDomain } from "../api/client";
+import { forgetToken, getAdminToken, hasTokenForDomain, setTokenForDomain, setTokenPreference } from "../api/client";
 import { createDomain, rotateDomainToken } from "../api/admin";
 import { useDomains } from "../hooks/useDomains";
 import { useActiveDomain } from "../context/ActiveDomainContext";
@@ -15,7 +15,7 @@ export function HeaderSettings() {
   const { domain: currentDomain, setDomain } = useActiveDomain();
   const [open, setOpen] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
-  const [saveAsAdmin, setSaveAsAdmin] = useState(false);
+  const [adminTokenInput, setAdminTokenInput] = useState("");
   const [adminDomain, setAdminDomain] = useState(currentDomain);
   const [newDomain, setNewDomain] = useState("");
   const [newDomainToken, setNewDomainToken] = useState("");
@@ -74,13 +74,9 @@ export function HeaderSettings() {
       message.error("Token required");
       return;
     }
-    if (saveAsAdmin) {
-      setTokenForDomain("admin", token);
-      message.success("Admin token saved");
-    } else {
-      setTokenForDomain(currentDomain, token);
-      message.success(`Token saved for domain ${currentDomain}`);
-    }
+    setTokenForDomain(currentDomain, token);
+    setTokenPreference("domain");
+    message.success(`Token saved for domain ${currentDomain}`);
     setTokenInput("");
   };
 
@@ -119,12 +115,9 @@ export function HeaderSettings() {
 
           <Space direction="vertical" size={8} style={{ width: "100%" }}>
             <Typography.Text strong>Token management</Typography.Text>
-            <Checkbox checked={saveAsAdmin} onChange={(e) => setSaveAsAdmin(e.target.checked)}>
-              Save entered token as admin token
-            </Checkbox>
             <Input.Password
               value={tokenInput}
-              placeholder={saveAsAdmin ? "Admin token" : `Token for ${currentDomain}`}
+              placeholder={`Token for ${currentDomain}`}
               onChange={(e) => setTokenInput(e.target.value)}
             />
             <Space wrap>
@@ -133,23 +126,45 @@ export function HeaderSettings() {
               </Button>
               <Button
                 onClick={() => {
-                  if (!adminToken) {
-                    message.error("No saved admin token");
-                    return;
-                  }
-                  setTokenForDomain(currentDomain, adminToken);
-                  message.success(`Applied admin token to ${currentDomain}`);
-                }}
-              >
-                Use Admin Token
-              </Button>
-              <Button
-                onClick={() => {
                   forgetToken(currentDomain);
                   message.success(`Forgot token for ${currentDomain}`);
                 }}
               >
                 Forget Domain Token
+              </Button>
+            </Space>
+            <Divider style={{ margin: "8px 0" }} />
+            <Typography.Text strong>Admin token</Typography.Text>
+            <Typography.Text type="secondary">
+              Used for domain management. Kept separate from domain access tokens.
+            </Typography.Text>
+            <Input.Password
+              value={adminTokenInput}
+              onChange={(e) => setAdminTokenInput(e.target.value)}
+              placeholder="Admin token"
+            />
+            <Space wrap>
+              <Button
+                onClick={() => {
+                  const next = adminTokenInput.trim();
+                  if (!next) {
+                    message.error("Admin token required");
+                    return;
+                  }
+                  setTokenForDomain("admin", next);
+                  setAdminTokenInput("");
+                  message.success("Admin token saved");
+                }}
+              >
+                Save Admin Token
+              </Button>
+              <Button
+                onClick={() => {
+                  forgetToken("admin");
+                  message.success("Forgot admin token");
+                }}
+              >
+                Forget Admin Token
               </Button>
             </Space>
           </Space>
@@ -165,15 +180,6 @@ export function HeaderSettings() {
                   onChange={(domain) => setAdminDomain(domain)}
                 />
                 <Space wrap>
-                  <Button
-                    onClick={() => {
-                      setTokenForDomain(adminDomain, adminToken);
-                      setDomain(adminDomain);
-                      message.success(`Using admin token in domain ${adminDomain}`);
-                    }}
-                  >
-                    Use Admin In Domain
-                  </Button>
                   <Button
                     loading={rotateTokenMut.isPending}
                     onClick={() => rotateTokenMut.mutate(adminDomain)}
@@ -255,7 +261,7 @@ export function HeaderSettings() {
           <Typography.Text type="secondary">Worker start example:</Typography.Text>
           <Typography.Paragraph style={{ marginBottom: 0 }}>
             <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
-{`WORKER_DOMAIN=${tokenModal.domain ?? currentDomain} API_TOKEN=<domain_token> \\
+{`DOMAIN=${tokenModal.domain ?? currentDomain} API_TOKEN=<domain_token> \\
 docker compose -f docker-compose.worker.yml up --build`}
             </pre>
           </Typography.Paragraph>

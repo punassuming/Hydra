@@ -1,6 +1,6 @@
-import { Modal, Input, Typography, Space, message, Checkbox } from "antd";
+import { Modal, Input, Typography, Space, message, Segmented } from "antd";
 import { useEffect, useState } from "react";
-import { setTokenForDomain } from "../api/client";
+import { setTokenForDomain, setTokenPreference, validateAdminToken, validateDomainToken } from "../api/client";
 import { useActiveDomain } from "../context/ActiveDomainContext";
 
 interface Props {
@@ -12,13 +12,14 @@ interface Props {
 export function AuthPrompt({ open, onClose, onSuccess }: Props) {
   const [token, setToken] = useState("");
   const [domainInput, setDomainInput] = useState("");
-  const [adminMode, setAdminMode] = useState(false);
+  const [mode, setMode] = useState<"domain" | "admin">("domain");
   const { domain, setDomain } = useActiveDomain();
 
   useEffect(() => {
     if (!open) return;
     setDomainInput(domain || "prod");
     setToken("");
+    setMode("domain");
   }, [open, domain]);
 
   return (
@@ -29,27 +30,34 @@ export function AuthPrompt({ open, onClose, onSuccess }: Props) {
       maskClosable={false}
       keyboard={false}
       onCancel={onClose}
-      onOk={() => {
+      onOk={async () => {
         const finalToken = token.trim();
         const finalDomain = domainInput.trim();
         if (!finalToken) {
           message.error("Token required");
           return;
         }
-        if (!adminMode && !finalDomain) {
+        if (mode === "domain" && !finalDomain) {
           message.error("Domain required");
           return;
         }
-        if (adminMode) {
-          setTokenForDomain("admin", finalToken);
-          if (finalDomain) {
+        try {
+          if (mode === "admin") {
+            await validateAdminToken(finalToken);
+            setTokenForDomain("admin", finalToken);
+            setTokenPreference("admin");
+            setDomain("admin");
+            message.success("Admin token saved");
+          } else {
+            await validateDomainToken(finalDomain, finalToken);
+            setTokenForDomain(finalDomain, finalToken);
+            setTokenPreference("domain");
             setDomain(finalDomain);
+            message.success(`Token saved for domain ${finalDomain}`);
           }
-          message.success("Admin token saved");
-        } else {
-          setTokenForDomain(finalDomain, finalToken);
-          setDomain(finalDomain);
-          message.success(`Token saved for domain ${finalDomain}`);
+        } catch (err) {
+          message.error(err instanceof Error ? err.message : "Authentication failed");
+          return;
         }
         onSuccess?.();
         onClose();
@@ -58,14 +66,25 @@ export function AuthPrompt({ open, onClose, onSuccess }: Props) {
       okText="Authenticate"
     >
       <Space direction="vertical" style={{ width: "100%" }}>
-        <Typography.Text>
-          Enter domain and token. Domain is required for non-admin authentication.
-        </Typography.Text>
-        <Input value={domainInput} onChange={(e) => setDomainInput(e.target.value)} placeholder="Domain (e.g. prod)" />
+        <Typography.Text>Choose login type, then enter the matching token.</Typography.Text>
+        <Segmented
+          block
+          value={mode}
+          options={[
+            { label: "Domain Token", value: "domain" },
+            { label: "Admin Token", value: "admin" },
+          ]}
+          onChange={(value) => setMode(value as "domain" | "admin")}
+        />
+        {mode === "domain" && (
+          <Input value={domainInput} onChange={(e) => setDomainInput(e.target.value)} placeholder="Domain (e.g. prod)" />
+        )}
         <Input.Password value={token} onChange={(e) => setToken(e.target.value)} placeholder="Token" />
-        <Checkbox checked={adminMode} onChange={(e) => setAdminMode(e.target.checked)}>
-          Use admin token
-        </Checkbox>
+        {mode === "admin" && (
+          <Typography.Text type="secondary">
+            Admin login is global. Use Settings or Admin page to switch domains after login.
+          </Typography.Text>
+        )}
       </Space>
     </Modal>
   );

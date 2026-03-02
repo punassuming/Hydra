@@ -77,7 +77,7 @@ export function StatusPage() {
           </Typography.Text>
           <Typography.Paragraph style={{ marginBottom: 0 }}>
             <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
-{`WORKER_DOMAIN=${domain} API_TOKEN=<domain_token> \\
+{`DOMAIN=${domain} API_TOKEN=<domain_token> \\
 docker compose -f docker-compose.worker.yml up --build`}
             </pre>
           </Typography.Paragraph>
