@@ -2,7 +2,7 @@ from scheduler.utils.affinity import passes_affinity
 from scheduler.utils.selectors import select_best_worker
 from scheduler.models.job_definition import JobDefinition, Affinity, ScheduleConfig
 from scheduler.models.executor import ShellExecutor, PythonExecutor
-from scheduler.api.jobs import _validate_job_definition
+from scheduler.api.jobs import _validate_job_definition, _build_dependency_graph
 from scheduler.utils.schedule import initialize_schedule, advance_schedule
 from datetime import datetime
 from scheduler.models.worker_info import WorkerInfo
@@ -109,3 +109,25 @@ def test_worker_info_running_jobs_is_isolated():
     w1.running_jobs.append("job-1")
     assert w1.running_jobs == ["job-1"]
     assert w2.running_jobs == []
+
+
+def test_build_dependency_graph_includes_upstream_and_downstream():
+    jobs = {
+        "a": {"_id": "a", "name": "A", "depends_on": []},
+        "b": {"_id": "b", "name": "B", "depends_on": ["a"]},
+        "c": {"_id": "c", "name": "C", "depends_on": ["b"]},
+        "x": {"_id": "x", "name": "X", "depends_on": []},
+    }
+    node_ids, edges = _build_dependency_graph(jobs, "b")
+    assert set(node_ids) == {"a", "b", "c"}
+    assert {"source": "a", "target": "b"} in edges
+    assert {"source": "b", "target": "c"} in edges
+
+
+def test_build_dependency_graph_includes_missing_dependency_node():
+    jobs = {
+        "b": {"_id": "b", "name": "B", "depends_on": ["missing-id"]},
+    }
+    node_ids, edges = _build_dependency_graph(jobs, "b")
+    assert set(node_ids) == {"b", "missing-id"}
+    assert edges == [{"source": "missing-id", "target": "b"}]
