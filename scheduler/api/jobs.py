@@ -436,6 +436,46 @@ def _serialize_ts(value):
     return value
 
 
+def _build_dependency_graph(
+    jobs_by_id: Dict[str, Dict[str, Any]],
+    root_job_id: str,
+) -> tuple[list[str], list[Dict[str, str]]]:
+    if root_job_id not in jobs_by_id:
+        return [], []
+
+    children_by_id: Dict[str, set[str]] = {}
+    for job_id, job in jobs_by_id.items():
+        for dep_id in job.get("depends_on", []) or []:
+            children_by_id.setdefault(dep_id, set()).add(job_id)
+
+    included: set[str] = set()
+    stack = [root_job_id]
+    while stack:
+        current = stack.pop()
+        if current in included:
+            continue
+        included.add(current)
+        # Only traverse parents that exist in this domain snapshot; missing refs are
+        # represented later as placeholder nodes when edges are materialized.
+        for parent in jobs_by_id.get(current, {}).get("depends_on", []) or []:
+            if parent in jobs_by_id:
+                stack.append(parent)
+        for child in children_by_id.get(current, set()):
+            if child in jobs_by_id:
+                stack.append(child)
+
+    edges: list[Dict[str, str]] = []
+    missing_nodes: set[str] = set()
+    for job_id in included:
+        for dep_id in jobs_by_id.get(job_id, {}).get("depends_on", []) or []:
+            edges.append({"source": dep_id, "target": job_id})
+            if dep_id not in jobs_by_id:
+                missing_nodes.add(dep_id)
+
+    ordered_nodes = sorted(included | missing_nodes)
+    return ordered_nodes, edges
+
+
 @router.get("/jobs/{job_id}/grid")
 def job_grid(job_id: str, request: Request):
     db = get_db()
@@ -514,16 +554,36 @@ def job_graph(job_id: str, request: Request):
     if not is_admin and job.get("domain", "prod") != domain:
         raise HTTPException(status_code=403, detail="forbidden")
     force_domain = request.query_params.get("domain")
-    runs = _fetch_job_runs(job_id, domain_filter=None if (is_admin and not force_domain) else (force_domain or domain))
-    last_status = runs[-1]["status"] if runs else "unknown"
-    nodes = [
-        {
-            "id": job_id,
-            "label": job.get("name", job_id),
-            "status": last_status,
-        }
-    ]
-    edges: List[Dict[str, Any]] = []
+    graph_domain = (
+        force_domain
+        if (is_admin and force_domain)
+        else job.get("domain", "prod")
+    )
+    jobs_in_domain = list(db.job_definitions.find({"domain": graph_domain}))
+    jobs_by_id: Dict[str, Dict[str, Any]] = {str(doc["_id"]): doc for doc in jobs_in_domain}
+    node_ids, edges = _build_dependency_graph(jobs_by_id, job_id)
+
+    status_by_job: Dict[str, str] = {}
+    if node_ids:
+        latest_runs = db.job_runs.find(
+            {"job_id": {"$in": node_ids}, "domain": graph_domain},
+            {"job_id": 1, "status": 1, "start_ts": 1},
+        ).sort("start_ts", -1)
+        for run in latest_runs:
+            run_job_id = run.get("job_id")
+            if run_job_id and run_job_id not in status_by_job:
+                status_by_job[run_job_id] = run.get("status", "unknown")
+
+    nodes: list[Dict[str, Any]] = []
+    for node_id in node_ids:
+        node_job = jobs_by_id.get(node_id)
+        nodes.append(
+            {
+                "id": node_id,
+                "label": (node_job or {}).get("name", f"{node_id} (missing)"),
+                "status": status_by_job.get(node_id, "unknown"),
+            }
+        )
     return {"nodes": nodes, "edges": edges}
 
 

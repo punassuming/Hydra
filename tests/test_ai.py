@@ -69,3 +69,51 @@ def test_analyze_run_invalid_provider():
     })
     # Pydantic validation should catch this or the logic raises 400/422
     assert response.status_code in [400, 422]
+
+
+def test_predict_duration_returns_estimate():
+    class FakeCursor:
+        def __init__(self, docs):
+            self.docs = docs
+
+        def sort(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, n):
+            return self.docs[:n]
+
+    class FakeJobRuns:
+        def find(self, *_args, **_kwargs):
+            return FakeCursor([{"duration": 10}, {"duration": 20}, {"duration": 40}])
+
+    class FakeDB:
+        job_runs = FakeJobRuns()
+
+    with patch("scheduler.api.ai.get_db", return_value=FakeDB()):
+        response = client.post("/ai/predict_duration", json={"job_id": "job-1"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["sample_size"] == 3
+    assert data["estimated_duration_seconds"] == 20.0
+    assert data["p90_duration_seconds"] == 36.0
+
+
+def test_predict_duration_empty_history():
+    class FakeCursor:
+        def sort(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, n):
+            return []
+
+    class FakeJobRuns:
+        def find(self, *_args, **_kwargs):
+            return FakeCursor()
+
+    class FakeDB:
+        job_runs = FakeJobRuns()
+
+    with patch("scheduler.api.ai.get_db", return_value=FakeDB()):
+        response = client.post("/ai/predict_duration", json={"job_id": "job-2"})
+    assert response.status_code == 200
+    assert response.json()["estimated_duration_seconds"] is None
