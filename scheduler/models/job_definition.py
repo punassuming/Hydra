@@ -70,6 +70,8 @@ class JobDefinition(BaseModel):
     max_retries: int = 0
     retry_delay_seconds: int = 0
     on_failure_webhooks: List[str] = Field(default_factory=list)
+    on_failure_email_to: List[str] = Field(default_factory=list)
+    on_failure_email_credential_ref: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -101,6 +103,8 @@ class JobCreate(BaseModel):
     max_retries: int = 0
     retry_delay_seconds: int = 0
     on_failure_webhooks: List[str] = Field(default_factory=list)
+    on_failure_email_to: List[str] = Field(default_factory=list)
+    on_failure_email_credential_ref: Optional[str] = None
 
 
 class JobUpdate(BaseModel):
@@ -121,6 +125,8 @@ class JobUpdate(BaseModel):
     max_retries: Optional[int] = None
     retry_delay_seconds: Optional[int] = None
     on_failure_webhooks: Optional[List[str]] = None
+    on_failure_email_to: Optional[List[str]] = None
+    on_failure_email_credential_ref: Optional[str] = None
 
 
 class JobValidationResult(BaseModel):

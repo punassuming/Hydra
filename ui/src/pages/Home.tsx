@@ -213,7 +213,7 @@ export function HomePage() {
           resetSelection();
         }}
         footer={null}
-        width={1100}
+        width={980}
         destroyOnClose
       >
         <JobForm
@@ -226,6 +226,10 @@ export function HomePage() {
           validating={validating}
           statusMessage={statusMessage}
           onReset={resetSelection}
+          onCancel={() => {
+            setModalVisible(false);
+            resetSelection();
+          }}
         />
         <Divider />
         <Typography.Text type="secondary">

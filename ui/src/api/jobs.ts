@@ -31,6 +31,8 @@ export interface JobPayload {
   max_retries?: number;
   retry_delay_seconds?: number;
   on_failure_webhooks?: string[];
+  on_failure_email_to?: string[];
+  on_failure_email_credential_ref?: string;
 }
 
 export interface ValidationResult {
@@ -85,4 +87,3 @@ export const analyzeRun = (payload: {
   question?: string;
 }) =>
     apiClient.post<{ analysis: string }>("/ai/analyze_run", { provider: "gemini", ...payload });
-

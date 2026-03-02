@@ -107,6 +107,12 @@ export function JobDetailPage() {
             {(job.on_failure_webhooks ?? []).length > 0 && (
               <Descriptions.Item label="Failure Webhooks">{(job.on_failure_webhooks ?? []).join(", ")}</Descriptions.Item>
             )}
+            {(job.on_failure_email_to ?? []).length > 0 && (
+              <Descriptions.Item label="Failure Emails">{(job.on_failure_email_to ?? []).join(", ")}</Descriptions.Item>
+            )}
+            {job.on_failure_email_credential_ref && (
+              <Descriptions.Item label="Email Credential Ref">{job.on_failure_email_credential_ref}</Descriptions.Item>
+            )}
           </Descriptions>
         ),
       },

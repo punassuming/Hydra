@@ -1,12 +1,15 @@
 import json
+import smtplib
 import threading
 import time
 import urllib.request
 from datetime import datetime
+from email.message import EmailMessage
 from typing import Any, Dict
 
 from .mongo_client import get_db
 from .redis_client import get_redis
+from .utils.encryption import decrypt_payload
 from .utils.logging import setup_logging
 from .utils.worker_ops import append_worker_op
 
@@ -102,6 +105,96 @@ def _fire_webhooks_async(webhooks: list, job_id: str, run_id: str, error_message
     if not webhooks:
         return
     t = threading.Thread(target=_fire_webhooks, args=(webhooks, job_id, run_id, error_message), daemon=True)
+    t.start()
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return default
+
+
+def _fire_email_alert(db, domain: str, credential_ref: str, recipients: list[str], job_id: str, run_id: str, error_message: str):
+    if not recipients or not credential_ref:
+        return
+
+    cred_doc = db.credentials.find_one({"name": credential_ref, "domain": domain})
+    if not cred_doc:
+        log.warning("Email alert credential '%s' not found in domain '%s'", credential_ref, domain)
+        return
+
+    try:
+        smtp = decrypt_payload(cred_doc.get("encrypted_payload", ""))
+    except Exception as exc:
+        log.warning("Failed to decrypt SMTP credential '%s': %s", credential_ref, exc)
+        return
+
+    host = str(smtp.get("host") or "").strip()
+    username = str(smtp.get("username") or "").strip()
+    password = str(smtp.get("password") or "")
+    sender = str(smtp.get("from_email") or username or "hydra@localhost").strip()
+    use_ssl = _as_bool(smtp.get("use_ssl"), False)
+    use_tls = _as_bool(smtp.get("use_tls"), not use_ssl)
+    port = int(smtp.get("port") or (465 if use_ssl else 587 if use_tls else 25))
+    timeout = int(smtp.get("timeout_seconds") or 10)
+
+    if not host:
+        log.warning("SMTP credential '%s' is missing host", credential_ref)
+        return
+
+    clean_recipients = [str(r).strip() for r in recipients if str(r).strip()]
+    if not clean_recipients:
+        return
+
+    msg = EmailMessage()
+    msg["Subject"] = f"[Hydra] Job failed: {job_id}"
+    msg["From"] = sender
+    msg["To"] = ", ".join(clean_recipients)
+    msg.set_content(
+        "\n".join(
+            [
+                "Hydra job failure alert",
+                f"domain: {domain}",
+                f"job_id: {job_id}",
+                f"run_id: {run_id}",
+                "",
+                "error:",
+                error_message or "(no error text)",
+            ]
+        )
+    )
+
+    try:
+        if use_ssl:
+            with smtplib.SMTP_SSL(host=host, port=port, timeout=timeout) as client:
+                if username:
+                    client.login(username, password)
+                client.send_message(msg)
+        else:
+            with smtplib.SMTP(host=host, port=port, timeout=timeout) as client:
+                if use_tls:
+                    client.starttls()
+                if username:
+                    client.login(username, password)
+                client.send_message(msg)
+    except Exception as exc:
+        log.warning("Email alert send failed for job %s: %s", job_id, exc)
+
+
+def _fire_email_alert_async(db, domain: str, credential_ref: str, recipients: list[str], job_id: str, run_id: str, error_message: str):
+    if not recipients or not credential_ref:
+        return
+    t = threading.Thread(
+        target=_fire_email_alert,
+        args=(db, domain, credential_ref, recipients, job_id, run_id, error_message),
+        daemon=True,
+    )
     t.start()
 
 
@@ -228,7 +321,17 @@ def _handle_run_end(payload: Dict[str, Any]):
         _trigger_dependents(job_id, domain, db)
     elif status == "failed":
         # Check for scheduler-level retries
-        job_doc = db.job_definitions.find_one({"_id": job_id}, {"max_retries": 1, "retry_delay_seconds": 1, "priority": 1, "on_failure_webhooks": 1})
+        job_doc = db.job_definitions.find_one(
+            {"_id": job_id},
+            {
+                "max_retries": 1,
+                "retry_delay_seconds": 1,
+                "priority": 1,
+                "on_failure_webhooks": 1,
+                "on_failure_email_to": 1,
+                "on_failure_email_credential_ref": 1,
+            },
+        )
         if job_doc:
             max_retries = int(job_doc.get("max_retries", 0))
             retry_delay = int(job_doc.get("retry_delay_seconds", 0))
@@ -246,6 +349,17 @@ def _handle_run_end(payload: Dict[str, Any]):
                 webhooks = job_doc.get("on_failure_webhooks") or []
                 stderr_text = payload.get("stderr", "") or payload.get("completion_reason", "")
                 _fire_webhooks_async(webhooks, job_id, run_id, stderr_text[:_WEBHOOK_MAX_ERROR_LEN])
+                email_to = job_doc.get("on_failure_email_to") or []
+                email_cred_ref = str(job_doc.get("on_failure_email_credential_ref") or "").strip()
+                _fire_email_alert_async(
+                    db,
+                    domain,
+                    email_cred_ref,
+                    email_to,
+                    job_id,
+                    run_id,
+                    stderr_text[:_WEBHOOK_MAX_ERROR_LEN],
+                )
 
 
 def _handle_event(payload: Dict[str, Any]):

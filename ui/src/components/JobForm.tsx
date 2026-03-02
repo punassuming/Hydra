@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Alert,
@@ -84,6 +84,8 @@ const createDefaultPayload = (): JobPayload => ({
   max_retries: 0,
   retry_delay_seconds: 0,
   on_failure_webhooks: [],
+  on_failure_email_to: [],
+  on_failure_email_credential_ref: "",
 });
 
 interface Props {
@@ -96,7 +98,11 @@ interface Props {
   validating: boolean;
   statusMessage?: string;
   onReset: () => void;
+  onCancel?: () => void;
 }
+
+type JobScheduleMode = JobPayload["schedule"]["mode"];
+type FormScheduleMode = JobScheduleMode | "dependency";
 
 export function JobForm({
   selectedJob,
@@ -108,6 +114,7 @@ export function JobForm({
   validating,
   statusMessage,
   onReset,
+  onCancel,
 }: Props) {
   const { domain } = useActiveDomain();
   const [payload, setPayload] = useState<JobPayload>(() => createDefaultPayload());
@@ -115,6 +122,9 @@ export function JobForm({
   const [prompt, setPrompt] = useState("");
   const [generating, setGenerating] = useState(false);
   const [provider, setProvider] = useState<"gemini" | "openai">("gemini");
+  const [formScheduleMode, setFormScheduleMode] = useState<FormScheduleMode>("immediate");
+  const [importError, setImportError] = useState<string>();
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   const workersQuery = useQuery({
     queryKey: ["workers", domain],
@@ -174,10 +184,16 @@ export function JobForm({
     try {
       const generated = await generateJob(prompt, provider);
       if (generated) {
-        setPayload({
-            ...generated,
-            executor: normalizeExecutor(generated.executor)
-        });
+        const nextPayload = {
+          ...generated,
+          executor: normalizeExecutor(generated.executor),
+        };
+        setPayload(nextPayload);
+        setFormScheduleMode(
+          (nextPayload.depends_on?.length ?? 0) > 0 && nextPayload.schedule.mode === "immediate"
+            ? "dependency"
+            : (nextPayload.schedule.mode as JobScheduleMode),
+        );
       }
     } catch (e) {
       console.error("Failed to generate job", e);
@@ -188,6 +204,11 @@ export function JobForm({
 
   useEffect(() => {
     if (selectedJob) {
+      const nextScheduleMode: FormScheduleMode =
+        selectedJob.depends_on && selectedJob.depends_on.length > 0 && selectedJob.schedule?.mode === "immediate"
+          ? "dependency"
+          : ((selectedJob.schedule?.mode ?? "immediate") as JobScheduleMode);
+      setFormScheduleMode(nextScheduleMode);
       setPayload({
         name: selectedJob.name,
         user: selectedJob.user || "default",
@@ -205,10 +226,14 @@ export function JobForm({
         max_retries: selectedJob.max_retries ?? 0,
         retry_delay_seconds: selectedJob.retry_delay_seconds ?? 0,
         on_failure_webhooks: selectedJob.on_failure_webhooks ?? [],
+        on_failure_email_to: selectedJob.on_failure_email_to ?? [],
+        on_failure_email_credential_ref: selectedJob.on_failure_email_credential_ref ?? "",
       });
     } else {
+      setFormScheduleMode("immediate");
       setPayload(createDefaultPayload());
     }
+    setImportError(undefined);
     setActiveStep(0);
   }, [selectedJob]);
 
@@ -269,15 +294,101 @@ export function JobForm({
   const toInputValue = (iso?: string | null) => (iso ? new Date(iso).toISOString().slice(0, 16) : "");
   const fromInputValue = (value: string) => (value ? new Date(value).toISOString() : null);
 
-  const handleValidateOnly = async () => onValidate(payload);
+  const handleValidateOnly = async () => onValidate(buildSubmissionPayload(payload));
+
+  const buildSubmissionPayload = (source: JobPayload): JobPayload => {
+    const normalized: JobPayload = {
+      ...source,
+      user: source.user?.trim() || "default",
+      schedule: {
+        ...source.schedule,
+        mode: formScheduleMode === "dependency" ? "immediate" : source.schedule.mode,
+      },
+      depends_on:
+        formScheduleMode === "dependency"
+          ? (source.depends_on ?? [])
+          : [],
+      on_failure_email_credential_ref: (source.on_failure_email_credential_ref ?? "").trim(),
+    };
+    return normalized;
+  };
 
   const handleValidateThenSubmit = async () => {
-    const validation = await onValidate(payload);
+    const normalized = buildSubmissionPayload(payload);
+    if (formScheduleMode === "dependency" && (normalized.depends_on?.length ?? 0) === 0) {
+      setImportError("Dependency mode requires at least one prerequisite job.");
+      return;
+    }
+    setImportError(undefined);
+    const validation = await onValidate(normalized);
     if (!validation?.valid) {
       return;
     }
-    const normalized = { ...payload, user: payload.user?.trim() || "default" };
     await onSubmit(normalized);
+  };
+
+  const handleScheduleModeChange = (mode: FormScheduleMode) => {
+    setImportError(undefined);
+    setFormScheduleMode(mode);
+    if (mode === "dependency") {
+      updateSchedule({
+        mode: "immediate",
+        enabled: true,
+        cron: "",
+        interval_seconds: null,
+        start_at: null,
+        end_at: null,
+        next_run_at: null,
+      });
+      return;
+    }
+    updateSchedule({ mode, next_run_at: null });
+    if ((payload.depends_on ?? []).length > 0) {
+      updatePayload("depends_on", []);
+    }
+  };
+
+  const handleExportJson = () => {
+    const toExport = buildSubmissionPayload(payload);
+    const blob = new Blob([JSON.stringify(toExport, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${(payload.name || "hydra-job").replace(/\s+/g, "-").toLowerCase()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportJsonFile = (file: File) => {
+    file.text()
+      .then((raw) => {
+        const imported = JSON.parse(raw) as Partial<JobPayload>;
+        if (!imported || typeof imported !== "object" || !imported.executor) {
+          throw new Error("Invalid job JSON format");
+        }
+        const nextPayload: JobPayload = {
+          ...createDefaultPayload(),
+          ...imported,
+          affinity: { ...createDefaultPayload().affinity, ...(imported.affinity ?? {}) },
+          schedule: { ...createDefaultPayload().schedule, ...(imported.schedule ?? {}) },
+          completion: { ...createDefaultPayload().completion, ...(imported.completion ?? {}) },
+          executor: normalizeExecutor(imported.executor as JobDefinition["executor"]),
+          depends_on: imported.depends_on ?? [],
+          on_failure_webhooks: imported.on_failure_webhooks ?? [],
+          on_failure_email_to: imported.on_failure_email_to ?? [],
+          on_failure_email_credential_ref: imported.on_failure_email_credential_ref ?? "",
+        };
+        setPayload(nextPayload);
+        const importedMode: FormScheduleMode =
+          (nextPayload.depends_on?.length ?? 0) > 0 && nextPayload.schedule.mode === "immediate"
+            ? "dependency"
+            : (nextPayload.schedule.mode as JobScheduleMode);
+        setFormScheduleMode(importedMode);
+        setImportError(undefined);
+      })
+      .catch((err: Error) => {
+        setImportError(err.message || "Failed to import JSON");
+      });
   };
 
   const executorTypeSelect = (
@@ -670,12 +781,13 @@ export function JobForm({
               <Col xs={24} md={8}>
                 <Form.Item label="Mode">
                   <Select
-                    value={schedule.mode}
-                    onChange={(mode) => updateSchedule({ mode, next_run_at: null })}
+                    value={formScheduleMode}
+                    onChange={(mode) => handleScheduleModeChange(mode as FormScheduleMode)}
                     options={[
                       { label: "Immediate", value: "immediate" },
                       { label: "Interval", value: "interval" },
                       { label: "Cron", value: "cron" },
+                      { label: "Dependency", value: "dependency" },
                     ]}
                   />
                 </Form.Item>
@@ -692,13 +804,33 @@ export function JobForm({
                     ? "Disabled"
                     : schedule.next_run_at
                       ? new Date(schedule.next_run_at).toLocaleString()
-                      : schedule.mode === "immediate"
+                      : formScheduleMode === "immediate" || formScheduleMode === "dependency"
                         ? "Immediately"
                         : "Pending"}
                 </Typography.Text>
               </Col>
             </Row>
-            {schedule.mode === "interval" && (
+            {formScheduleMode === "dependency" && (
+              <Form.Item
+                label="Depends On"
+                tooltip="This job will run when all selected jobs finish successfully."
+              >
+                <Select
+                  mode="multiple"
+                  style={{ width: "100%" }}
+                  placeholder="Select prerequisite jobs..."
+                  value={payload.depends_on ?? []}
+                  onChange={(value) => updatePayload("depends_on", value)}
+                  options={allJobs
+                    .filter((j) => j._id !== (selectedJob?._id))
+                    .map((j) => ({ label: `${j.name} (${j._id.slice(0, 8)})`, value: j._id }))}
+                  filterOption={(input, option) =>
+                    ((option?.label as string) ?? "").toLowerCase().includes(input.toLowerCase())
+                  }
+                />
+              </Form.Item>
+            )}
+            {formScheduleMode === "interval" && (
               <Row gutter={16}>
                 <Col xs={24} md={12}>
                   <Form.Item label="Interval (seconds)">
@@ -712,7 +844,7 @@ export function JobForm({
                 </Col>
               </Row>
             )}
-            {schedule.mode === "cron" && (
+            {formScheduleMode === "cron" && (
               <Row gutter={16}>
                 <Col span={24}>
                   <Form.Item label="Cron Expression">
@@ -721,7 +853,7 @@ export function JobForm({
                 </Col>
               </Row>
             )}
-            {(schedule.mode === "interval" || schedule.mode === "cron") && (
+            {(formScheduleMode === "interval" || formScheduleMode === "cron") && (
               <Row gutter={16}>
                 <Col xs={24} md={12}>
                   <Form.Item label="Start At">
@@ -999,20 +1131,26 @@ export function JobForm({
                 autoSize={{ minRows: 2 }}
               />
             </Form.Item>
-            <Divider orientation="left" plain>Job Dependencies</Divider>
-            <Form.Item label="Depends On" tooltip="This job will be triggered automatically when all listed jobs succeed">
-              <Select
-                mode="multiple"
-                style={{ width: "100%" }}
-                placeholder="Select prerequisite jobs..."
-                value={payload.depends_on ?? []}
-                onChange={(value) => updatePayload("depends_on", value)}
-                options={allJobs
-                  .filter((j) => j._id !== (selectedJob?._id))
-                  .map((j) => ({ label: `${j.name} (${j._id.slice(0, 8)})`, value: j._id }))}
-                filterOption={(input, option) =>
-                  (option?.label as string ?? "").toLowerCase().includes(input.toLowerCase())
-                }
+            <Row gutter={16}>
+              <Col xs={24} md={8}>
+                <Form.Item label="Failure Email Credential Ref" tooltip="Name of a domain credential containing SMTP settings and auth.">
+                  <Input
+                    value={payload.on_failure_email_credential_ref ?? ""}
+                    onChange={(e) => updatePayload("on_failure_email_credential_ref", e.target.value)}
+                    placeholder="smtp-alerts"
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Form.Item
+              label="Failure Email Recipients (one per line)"
+              tooltip="Send terminal-failure alerts by email using the SMTP credential above."
+            >
+              <Input.TextArea
+                value={(payload.on_failure_email_to ?? []).join("\n")}
+                onChange={(e) => updatePayload("on_failure_email_to", parseList(e.target.value))}
+                placeholder="ops@example.com"
+                autoSize={{ minRows: 2 }}
               />
             </Form.Item>
           </>
@@ -1023,7 +1161,18 @@ export function JobForm({
   const activeKey = steps[activeStep]?.key ?? "basics";
 
   return (
-    <Form layout="vertical" onFinish={handleValidateThenSubmit}>
+    <Form layout="vertical" onFinish={handleValidateThenSubmit} size="small">
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".json,application/json"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) handleImportJsonFile(file);
+          e.currentTarget.value = "";
+        }}
+      />
       {!selectedJob && (
         <Alert
             message="Magic Job Generator"
@@ -1046,20 +1195,33 @@ export function JobForm({
             }
             type="info"
             showIcon
-            style={{ marginBottom: 20 }}
+            style={{ marginBottom: 12 }}
         />
       )}
+      {importError && (
+        <Alert
+          type="error"
+          showIcon
+          message={importError}
+          style={{ marginBottom: 12 }}
+        />
+      )}
+      <Space wrap style={{ marginBottom: 8 }}>
+        <Button onClick={handleExportJson}>Export JSON</Button>
+        <Button onClick={() => importInputRef.current?.click()}>Import JSON</Button>
+      </Space>
       <Steps
         current={activeStep}
         items={steps}
         onChange={setActiveStep}
         responsive
+        size="small"
       />
-      <Divider />
-      <Space direction="vertical" size="large" style={{ width: "100%" }}>
+      <Divider style={{ margin: "12px 0" }} />
+      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
         {renderStepContent(activeKey)}
       </Space>
-      <Divider />
+      <Divider style={{ margin: "12px 0" }} />
       <Space wrap>
         {activeStep > 0 && (
           <Button onClick={() => setActiveStep((prev) => Math.max(0, prev - 1))}>
@@ -1082,7 +1244,7 @@ export function JobForm({
         {!selectedJob && (
           <Button
             onClick={() => {
-              const normalized = { ...payload, user: payload.user?.trim() || "default" };
+              const normalized = buildSubmissionPayload(payload);
               onAdhocRun(normalized);
             }}
             disabled={submitting}
@@ -1101,6 +1263,16 @@ export function JobForm({
             New Job
           </Button>
         )}
+        <Button
+          onClick={() => {
+            setPayload(createDefaultPayload());
+            setFormScheduleMode("immediate");
+            setImportError(undefined);
+            (onCancel ?? onReset)();
+          }}
+        >
+          Cancel
+        </Button>
       </Space>
       {statusMessage && <Typography.Paragraph style={{ marginTop: "0.5rem" }}>{statusMessage}</Typography.Paragraph>}
     </Form>

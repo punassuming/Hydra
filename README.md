@@ -14,6 +14,7 @@ Hydra Jobs is a distributed job runner with:
   - Handles schedule loops (immediate/cron/interval)
   - Performs failover requeue on offline workers
   - Consumes worker run events from Redis (`run_events:<domain>`) and writes `job_runs` in Mongo
+  - On terminal failures, can send alerts through webhooks and SMTP email (using domain credentials)
 - Worker is Redis-only at runtime:
   - Registers metadata + token hash in Redis
   - Heartbeats and publishes rolling metrics (memory/process/load)
