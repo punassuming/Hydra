@@ -124,6 +124,8 @@ export function JobForm({
   const [provider, setProvider] = useState<"gemini" | "openai">("gemini");
   const [formScheduleMode, setFormScheduleMode] = useState<FormScheduleMode>("immediate");
   const [importError, setImportError] = useState<string>();
+  const [notifyWebhookEnabled, setNotifyWebhookEnabled] = useState(false);
+  const [notifyEmailEnabled, setNotifyEmailEnabled] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
 
   const workersQuery = useQuery({
@@ -229,9 +231,13 @@ export function JobForm({
         on_failure_email_to: selectedJob.on_failure_email_to ?? [],
         on_failure_email_credential_ref: selectedJob.on_failure_email_credential_ref ?? "",
       });
+      setNotifyWebhookEnabled((selectedJob.on_failure_webhooks ?? []).length > 0);
+      setNotifyEmailEnabled((selectedJob.on_failure_email_to ?? []).length > 0 || Boolean(selectedJob.on_failure_email_credential_ref));
     } else {
       setFormScheduleMode("immediate");
       setPayload(createDefaultPayload());
+      setNotifyWebhookEnabled(false);
+      setNotifyEmailEnabled(false);
     }
     setImportError(undefined);
     setActiveStep(0);
@@ -251,7 +257,18 @@ export function JobForm({
   };
 
   const updateExecutor = (update: Record<string, unknown>) => {
-    setPayload((prev) => ({ ...prev, executor: { ...prev.executor, ...update } as JobPayload["executor"] }));
+    setPayload((prev) => {
+      const nextExecutor = { ...prev.executor, ...update } as JobPayload["executor"];
+      return {
+        ...prev,
+        executor: nextExecutor,
+        affinity: {
+          ...prev.affinity,
+          // Keep placement constraints aligned with selected executor.
+          executor_types: [nextExecutor.type],
+        },
+      };
+    });
   };
 
   const updateSchedule = (update: Record<string, unknown>) => {
@@ -291,7 +308,13 @@ export function JobForm({
     updateCompletion({ [field]: parseList(value) });
   };
 
-  const toInputValue = (iso?: string | null) => (iso ? new Date(iso).toISOString().slice(0, 16) : "");
+  const toInputValue = (iso?: string | null) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    const local = new Date(d.getTime() - d.getTimezoneOffset() * 60_000);
+    return local.toISOString().slice(0, 16);
+  };
   const fromInputValue = (value: string) => (value ? new Date(value).toISOString() : null);
 
   const handleValidateOnly = async () => onValidate(buildSubmissionPayload(payload));
@@ -309,6 +332,12 @@ export function JobForm({
           ? (source.depends_on ?? [])
           : [],
       on_failure_email_credential_ref: (source.on_failure_email_credential_ref ?? "").trim(),
+      on_failure_webhooks: notifyWebhookEnabled ? (source.on_failure_webhooks ?? []) : [],
+      on_failure_email_to: notifyEmailEnabled ? (source.on_failure_email_to ?? []) : [],
+      affinity: {
+        ...source.affinity,
+        executor_types: [source.executor.type],
+      },
     };
     return normalized;
   };
@@ -378,7 +407,13 @@ export function JobForm({
           on_failure_email_to: imported.on_failure_email_to ?? [],
           on_failure_email_credential_ref: imported.on_failure_email_credential_ref ?? "",
         };
+        nextPayload.affinity = {
+          ...nextPayload.affinity,
+          executor_types: [nextPayload.executor.type],
+        };
         setPayload(nextPayload);
+        setNotifyWebhookEnabled((nextPayload.on_failure_webhooks ?? []).length > 0);
+        setNotifyEmailEnabled((nextPayload.on_failure_email_to ?? []).length > 0 || Boolean(nextPayload.on_failure_email_credential_ref));
         const importedMode: FormScheduleMode =
           (nextPayload.depends_on?.length ?? 0) > 0 && nextPayload.schedule.mode === "immediate"
             ? "dependency"
@@ -555,10 +590,18 @@ export function JobForm({
               <>
                 <Row gutter={16}>
                   <Col xs={24} md={12}>
-                    <Form.Item label="Shell">
-                      <Input
+                    <Form.Item label="Shell REPL">
+                      <Select
                         value={executor.shell ?? (executor.type === "batch" ? "cmd" : "bash")}
-                        onChange={(e) => updateExecutor({ shell: e.target.value })}
+                        onChange={(val) => updateExecutor({ shell: val })}
+                        options={[
+                          { label: "bash", value: "bash" },
+                          { label: "sh", value: "sh" },
+                          { label: "zsh", value: "zsh" },
+                          { label: "pwsh", value: "pwsh" },
+                          { label: "powershell", value: "powershell" },
+                          { label: "cmd", value: "cmd" },
+                        ]}
                       />
                     </Form.Item>
                   </Col>
@@ -572,12 +615,12 @@ export function JobForm({
                     </Form.Item>
                   </Col>
                 </Row>
-                <Form.Item label="Script / Code Block">
+                <Form.Item label="Command">
                   <Input.TextArea
                     value={executor.script ?? ""}
                     onChange={(e) => updateExecutor({ script: e.target.value })}
-                    autoSize={{ minRows: 8 }}
-                    placeholder="Multi-line shell or batch scripts supported"
+                    autoSize={{ minRows: 2, maxRows: 6 }}
+                    placeholder="python -m pip list"
                   />
                 </Form.Item>
               </>
@@ -810,6 +853,9 @@ export function JobForm({
                 </Typography.Text>
               </Col>
             </Row>
+            <Typography.Text type="secondary">
+              `Start At`/`End At` are shown in your browser local time and stored as UTC.
+            </Typography.Text>
             {formScheduleMode === "dependency" && (
               <Form.Item
                 label="Depends On"
@@ -1019,19 +1065,9 @@ export function JobForm({
                 </Form.Item>
               </Col>
             </Row>
-            <Row gutter={16}>
-              <Col xs={24} md={12}>
-                <Form.Item label="Required Executor Types">
-                  <Select
-                    mode="tags"
-                    value={payload.affinity.executor_types ?? []}
-                    onChange={(vals) => updateAffinity("executor_types", vals)}
-                    options={workerHints.capabilities.map((v) => ({ label: v, value: v }))}
-                    placeholder="shell, python, powershell, sql"
-                  />
-                </Form.Item>
-              </Col>
-            </Row>
+            <Typography.Text type="secondary">
+              Executor type matching is automatic based on the selected executor.
+            </Typography.Text>
           </>
         );
       case "basics":
@@ -1123,36 +1159,53 @@ export function JobForm({
                 </Form.Item>
               </Col>
             </Row>
-            <Form.Item label="Failure Webhook URLs (one per line)" tooltip="HTTP POST will be sent to these URLs on terminal failure">
-              <Input.TextArea
-                value={(payload.on_failure_webhooks ?? []).join("\n")}
-                onChange={(e) => updatePayload("on_failure_webhooks", parseList(e.target.value))}
-                placeholder="https://hooks.example.com/alert"
-                autoSize={{ minRows: 2 }}
-              />
-            </Form.Item>
-            <Row gutter={16}>
-              <Col xs={24} md={8}>
-                <Form.Item label="Failure Email Credential Ref" tooltip="Name of a domain credential containing SMTP settings and auth.">
-                  <Input
-                    value={payload.on_failure_email_credential_ref ?? ""}
-                    onChange={(e) => updatePayload("on_failure_email_credential_ref", e.target.value)}
-                    placeholder="smtp-alerts"
+            <Divider orientation="left" plain>Notifications</Divider>
+            <Space direction="vertical" style={{ width: "100%" }} size={6}>
+              <Space>
+                <Typography.Text strong>Webhook Alerts</Typography.Text>
+                <Switch checked={notifyWebhookEnabled} onChange={setNotifyWebhookEnabled} />
+              </Space>
+              {notifyWebhookEnabled && (
+                <Form.Item label="Failure Webhook URLs (one per line)" tooltip="HTTP POST will be sent on terminal failure">
+                  <Input.TextArea
+                    value={(payload.on_failure_webhooks ?? []).join("\n")}
+                    onChange={(e) => updatePayload("on_failure_webhooks", parseList(e.target.value))}
+                    placeholder="https://hooks.example.com/alert"
+                    autoSize={{ minRows: 2 }}
                   />
                 </Form.Item>
-              </Col>
-            </Row>
-            <Form.Item
-              label="Failure Email Recipients (one per line)"
-              tooltip="Send terminal-failure alerts by email using the SMTP credential above."
-            >
-              <Input.TextArea
-                value={(payload.on_failure_email_to ?? []).join("\n")}
-                onChange={(e) => updatePayload("on_failure_email_to", parseList(e.target.value))}
-                placeholder="ops@example.com"
-                autoSize={{ minRows: 2 }}
-              />
-            </Form.Item>
+              )}
+              <Space>
+                <Typography.Text strong>Email Alerts</Typography.Text>
+                <Switch checked={notifyEmailEnabled} onChange={setNotifyEmailEnabled} />
+              </Space>
+              {notifyEmailEnabled && (
+                <>
+                  <Row gutter={16}>
+                    <Col xs={24} md={10}>
+                      <Form.Item label="SMTP Credential Ref" tooltip="Domain credential name containing SMTP auth and host settings.">
+                        <Input
+                          value={payload.on_failure_email_credential_ref ?? ""}
+                          onChange={(e) => updatePayload("on_failure_email_credential_ref", e.target.value)}
+                          placeholder="smtp-alerts"
+                        />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                  <Form.Item
+                    label="Failure Email Recipients (one per line)"
+                    tooltip="Email addresses to notify on terminal failure."
+                  >
+                    <Input.TextArea
+                      value={(payload.on_failure_email_to ?? []).join("\n")}
+                      onChange={(e) => updatePayload("on_failure_email_to", parseList(e.target.value))}
+                      placeholder="ops@example.com"
+                      autoSize={{ minRows: 2 }}
+                    />
+                  </Form.Item>
+                </>
+              )}
+            </Space>
           </>
         );
     }
@@ -1252,6 +1305,11 @@ export function JobForm({
           >
             Run Adhoc
           </Button>
+        )}
+        {!selectedJob && (
+          <Typography.Text type="secondary">
+            `Adhoc` runs once without saving. `Immediate` mode saves the job and queues now.
+          </Typography.Text>
         )}
         {selectedJob && (
           <Button onClick={onManualRun} type="default">
