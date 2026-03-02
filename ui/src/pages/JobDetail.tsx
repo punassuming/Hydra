@@ -95,7 +95,7 @@ export function JobDetailPage() {
             <Descriptions.Item label="Bypass Concurrency">
               {job.bypass_concurrency ? "enabled" : "disabled"}
             </Descriptions.Item>
-            <Descriptions.Item label="Schedule Mode">{job.schedule.mode}</Descriptions.Item>
+            <Descriptions.Item label="Schedule Mode">{job.schedule.mode === "immediate" ? "manual" : job.schedule.mode}</Descriptions.Item>
             <Descriptions.Item label="Retries">{job.retries}</Descriptions.Item>
             <Descriptions.Item label="Timeout">{job.timeout}s</Descriptions.Item>
             {(job.max_retries ?? 0) > 0 && (
@@ -189,7 +189,7 @@ export function JobDetailPage() {
               {job.name}
             </Typography.Title>
             <Tag color="blue">{job.executor.type}</Tag>
-            <Tag color={job.schedule.enabled ? "green" : "default"}>{job.schedule.mode}</Tag>
+            <Tag color={job.schedule.enabled ? "green" : "default"}>{job.schedule.mode === "immediate" ? "manual" : job.schedule.mode}</Tag>
           </Space>
           <Space>
             <Button onClick={handleRunNow} loading={manualRun.isPending}>Run Now</Button>

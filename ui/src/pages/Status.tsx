@@ -105,7 +105,7 @@ docker compose -f docker-compose.worker.yml up --build`}
                 return (
                   <Space>
                     <Typography.Text strong>{job.name}</Typography.Text>
-                    <Tag color="default">{job.schedule_mode}</Tag>
+                    <Tag color="default">{job.schedule_mode === "immediate" ? "manual" : job.schedule_mode}</Tag>
                     {last && <StatusBadge status={last.status} />}
                   </Space>
                 );

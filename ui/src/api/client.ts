@@ -121,8 +121,22 @@ async function handleResponse<T>(res: Response): Promise<T> {
     if (res.status === 401) {
       window.dispatchEvent(new CustomEvent(AUTH_REQUIRED_EVENT));
     }
-    const detail = await res.json().catch(() => ({}));
-    throw new Error(detail?.detail ?? res.statusText);
+    const detail = await res.json().catch(() => ({} as any));
+    const rawDetail = detail?.detail;
+    if (Array.isArray(rawDetail)) {
+      const flat = rawDetail
+        .map((item: any) => {
+          if (typeof item === "string") return item;
+          if (item?.msg) return String(item.msg);
+          return JSON.stringify(item);
+        })
+        .join("; ");
+      throw new Error(flat || res.statusText);
+    }
+    if (rawDetail && typeof rawDetail === "object") {
+      throw new Error(JSON.stringify(rawDetail));
+    }
+    throw new Error(rawDetail ?? res.statusText);
   }
   return res.json();
 }

@@ -124,6 +124,7 @@ export function JobForm({
   const [provider, setProvider] = useState<"gemini" | "openai">("gemini");
   const [formScheduleMode, setFormScheduleMode] = useState<FormScheduleMode>("immediate");
   const [importError, setImportError] = useState<string>();
+  const [lastValidation, setLastValidation] = useState<ValidationResult | undefined>();
   const [notifyWebhookEnabled, setNotifyWebhookEnabled] = useState(false);
   const [notifyEmailEnabled, setNotifyEmailEnabled] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -166,6 +167,18 @@ export function JobForm({
   }, [workersQuery.data]);
 
   const normalizeExecutor = (exec: JobDefinition["executor"]): JobPayload["executor"] => {
+    if (exec.type === "batch" || exec.type === "powershell") {
+      return {
+        type: "shell",
+        script: (exec as any).script ?? "",
+        shell: (exec as any).shell ?? (exec.type === "batch" ? "cmd" : "pwsh"),
+        args: (exec as any).args,
+        env: (exec as any).env,
+        workdir: (exec as any).workdir ?? null,
+        impersonate_user: (exec as any).impersonate_user ?? null,
+        kerberos: (exec as any).kerberos ?? null,
+      };
+    }
     if (exec.type !== "python") {
       return exec as JobPayload["executor"];
     }
@@ -240,6 +253,7 @@ export function JobForm({
       setNotifyEmailEnabled(false);
     }
     setImportError(undefined);
+    setLastValidation(undefined);
     setActiveStep(0);
   }, [selectedJob]);
 
@@ -317,7 +331,11 @@ export function JobForm({
   };
   const fromInputValue = (value: string) => (value ? new Date(value).toISOString() : null);
 
-  const handleValidateOnly = async () => onValidate(buildSubmissionPayload(payload));
+  const handleValidateOnly = async () => {
+    const result = await onValidate(buildSubmissionPayload(payload));
+    setLastValidation(result);
+    return result;
+  };
 
   const buildSubmissionPayload = (source: JobPayload): JobPayload => {
     const normalized: JobPayload = {
@@ -350,6 +368,7 @@ export function JobForm({
     }
     setImportError(undefined);
     const validation = await onValidate(normalized);
+    setLastValidation(validation);
     if (!validation?.valid) {
       return;
     }
@@ -358,6 +377,7 @@ export function JobForm({
 
   const handleScheduleModeChange = (mode: FormScheduleMode) => {
     setImportError(undefined);
+    setLastValidation(undefined);
     setFormScheduleMode(mode);
     if (mode === "dependency") {
       updateSchedule({
@@ -434,8 +454,6 @@ export function JobForm({
           const defaults: Record<string, any> = {
             python: createDefaultPythonExecutor(),
             shell: { type: "shell", script: "echo 'hello world'", shell: "bash" },
-            batch: { type: "batch", script: "echo hello", shell: "cmd" },
-            powershell: { type: "powershell", script: "Write-Host 'hello world'", shell: "pwsh" },
             sql: { type: "sql", dialect: "postgres", query: "SELECT 1;", connection_uri: "", database: "" },
             external: { type: "external", command: "/usr/bin/env" },
           };
@@ -443,8 +461,6 @@ export function JobForm({
         }}
         options={[
           { label: "Shell", value: "shell" },
-          { label: "Batch", value: "batch" },
-          { label: "PowerShell", value: "powershell" },
           { label: "Python", value: "python" },
           { label: "SQL / Database", value: "sql" },
           { label: "External Binary", value: "external" },
@@ -586,13 +602,13 @@ export function JobForm({
               </>
             )}
 
-            {(executor.type === "shell" || executor.type === "batch") && (
+            {executor.type === "shell" && (
               <>
                 <Row gutter={16}>
                   <Col xs={24} md={12}>
                     <Form.Item label="Shell REPL">
                       <Select
-                        value={executor.shell ?? (executor.type === "batch" ? "cmd" : "bash")}
+                        value={executor.shell ?? "bash"}
                         onChange={(val) => updateExecutor({ shell: val })}
                         options={[
                           { label: "bash", value: "bash" },
@@ -827,7 +843,7 @@ export function JobForm({
                     value={formScheduleMode}
                     onChange={(mode) => handleScheduleModeChange(mode as FormScheduleMode)}
                     options={[
-                      { label: "Immediate", value: "immediate" },
+                      { label: "Manual", value: "immediate" },
                       { label: "Interval", value: "interval" },
                       { label: "Cron", value: "cron" },
                       { label: "Dependency", value: "dependency" },
@@ -848,7 +864,7 @@ export function JobForm({
                     : schedule.next_run_at
                       ? new Date(schedule.next_run_at).toLocaleString()
                       : formScheduleMode === "immediate" || formScheduleMode === "dependency"
-                        ? "Immediately"
+                        ? "When manually triggered (or now on save)"
                         : "Pending"}
                 </Typography.Text>
               </Col>
@@ -894,8 +910,39 @@ export function JobForm({
               <Row gutter={16}>
                 <Col span={24}>
                   <Form.Item label="Cron Expression">
-                    <Input value={schedule.cron ?? ""} onChange={(e) => updateSchedule({ cron: e.target.value })} placeholder="*/5 * * * *" />
+                    <Input
+                      value={schedule.cron ?? ""}
+                      onChange={(e) => {
+                        setLastValidation(undefined);
+                        updateSchedule({ cron: e.target.value });
+                      }}
+                      placeholder="*/5 * * * *"
+                    />
                   </Form.Item>
+                  <Space direction="vertical" size={4} style={{ width: "100%" }}>
+                    <Typography.Text type="secondary">
+                      Standard 5-field cron: `minute hour day-of-month month day-of-week`. Example: `*/5 * * * *` (every 5 min).
+                    </Typography.Text>
+                    <Button size="small" onClick={handleValidateOnly} loading={validating}>
+                      Preview Cron
+                    </Button>
+                    {lastValidation?.next_run_at && (
+                      <Typography.Text type="secondary">
+                        Next run: {new Date(lastValidation.next_run_at).toLocaleString()} (local) ·{" "}
+                        {new Date(lastValidation.next_run_at).toISOString()} (UTC)
+                      </Typography.Text>
+                    )}
+                    {lastValidation && !lastValidation.valid && (
+                      <Alert
+                        type="error"
+                        showIcon
+                        message={
+                          lastValidation.errors.find((e) => e.toLowerCase().includes("cron")) ??
+                          "Cron expression is invalid."
+                        }
+                      />
+                    )}
+                  </Space>
                 </Col>
               </Row>
             )}
@@ -1303,12 +1350,12 @@ export function JobForm({
             disabled={submitting}
             type="dashed"
           >
-            Run Adhoc
+            Run Non-Persistent
           </Button>
         )}
         {!selectedJob && (
           <Typography.Text type="secondary">
-            `Adhoc` runs once without saving. `Immediate` mode saves the job and queues now.
+            `Non-Persistent` runs once without keeping the job. `Manual` saves the job and can queue immediately.
           </Typography.Text>
         )}
         {selectedJob && (

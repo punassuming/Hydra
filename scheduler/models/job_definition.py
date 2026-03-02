@@ -32,8 +32,13 @@ class ScheduleConfig(BaseModel):
         if self.mode == "cron":
             if not self.cron:
                 raise ValueError("cron expression is required when mode='cron'")
-            if not croniter.is_valid(self.cron):
-                raise ValueError(f"Invalid cron expression: {self.cron}")
+            try:
+                if not croniter.is_valid(self.cron):
+                    raise ValueError("invalid cron syntax")
+                # Force parser execution so parser-specific diagnostics surface.
+                croniter(self.cron, datetime.utcnow()).get_next(datetime)
+            except Exception as exc:
+                raise ValueError(f"Invalid cron expression '{self.cron}': {exc}") from exc
         return self
 
 

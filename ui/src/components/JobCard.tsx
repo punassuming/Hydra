@@ -24,7 +24,7 @@ export function JobCard({ job, onRun, onEdit, selected, compact = false }: JobCa
   const nextRun = job.schedule?.next_run_at
     ? new Date(job.schedule.next_run_at).toLocaleString()
     : job.schedule?.mode === "immediate"
-      ? "Immediate"
+      ? "Manual"
       : "N/A";
 
   return (
@@ -74,7 +74,7 @@ export function JobCard({ job, onRun, onEdit, selected, compact = false }: JobCa
 
             <Space direction="vertical" size={4} style={{ width: "100%" }}>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                <ClockCircleOutlined /> Schedule: {job.schedule?.mode}
+                <ClockCircleOutlined /> Schedule: {job.schedule?.mode === "immediate" ? "manual" : job.schedule?.mode}
               </Typography.Text>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 Next Run: {nextRun}

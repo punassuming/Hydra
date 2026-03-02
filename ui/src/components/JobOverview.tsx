@@ -50,7 +50,7 @@ export function JobOverview() {
       title: "Schedule",
       dataIndex: "schedule_mode",
       key: "schedule_mode",
-      render: (mode: string) => <Tag>{mode}</Tag>,
+      render: (mode: string) => <Tag>{mode === "immediate" ? "manual" : mode}</Tag>,
     },
     { title: "Total Runs", dataIndex: "total_runs", key: "total_runs" },
     {

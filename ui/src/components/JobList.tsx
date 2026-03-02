@@ -38,7 +38,7 @@ export function JobList({ jobs, onSelect, selectedId, loading, onEdit, onRun }: 
       key: "schedule",
       render: (_: unknown, record: JobDefinition) => (
         <div>
-          <strong>{record.schedule.mode}</strong>
+          <strong>{record.schedule.mode === "immediate" ? "manual" : record.schedule.mode}</strong>
           <br />
           <small>
             {!record.schedule.enabled
@@ -46,7 +46,7 @@ export function JobList({ jobs, onSelect, selectedId, loading, onEdit, onRun }: 
               : record.schedule.next_run_at
                 ? new Date(record.schedule.next_run_at).toLocaleString()
                 : record.schedule.mode === "immediate"
-                  ? "immediate"
+                  ? "manual"
                   : "pending"}
           </small>
         </div>
