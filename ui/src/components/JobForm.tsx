@@ -842,21 +842,38 @@ export function JobForm({
             <Typography.Text type="secondary">
               Linux workers only. If `impersonate_user` is set, worker runs command as `sudo -n -u &lt;user&gt;` and runs `kinit -kt` before job execution when Kerberos fields are provided.
             </Typography.Text>
-            <Divider>Git Source (optional)</Divider>
+            <Divider>Source Provisioning (optional)</Divider>
             <Row gutter={16} align="middle">
               <Col xs={24} md={12}>
-                <Form.Item label="Enable Git Source">
+                <Form.Item label="Enable Source Provisioning">
                   <Switch
                     checked={!!payload.source}
-                    onChange={(checked) => updateSource(checked ? { url: "", ref: "main" } : null)}
+                    onChange={(checked) => updateSource(checked ? { protocol: "git", url: "", ref: "main" } : null)}
                   />
                   <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
-                    Clone a git repository before running the job
+                    Provision source code before running the job
                   </Typography.Text>
                 </Form.Item>
               </Col>
+              {payload.source && (
+                <Col xs={24} md={6}>
+                  <Form.Item label="Protocol">
+                    <Select
+                      value={payload.source.protocol ?? "git"}
+                      onChange={(v) => {
+                        const proto = v as "git" | "copy";
+                        updateSource({ protocol: proto, url: "", ref: proto === "git" ? "main" : "", path: null, credential_ref: null });
+                      }}
+                      options={[
+                        { label: "Git clone", value: "git" },
+                        { label: "Local copy", value: "copy" },
+                      ]}
+                    />
+                  </Form.Item>
+                </Col>
+              )}
             </Row>
-            {payload.source && (
+            {payload.source && (payload.source.protocol ?? "git") === "git" && (
               <>
                 <Row gutter={16}>
                   <Col xs={24} md={12}>
@@ -902,6 +919,36 @@ export function JobForm({
                   type="info"
                   showIcon
                   message="The worker will shallow-clone the repository into a temporary directory before execution, then clean it up afterwards. Store a personal access token via Admin > Credentials and reference it here for private repositories."
+                  style={{ marginBottom: 12 }}
+                />
+              </>
+            )}
+            {payload.source && payload.source.protocol === "copy" && (
+              <>
+                <Row gutter={16}>
+                  <Col xs={24} md={12}>
+                    <Form.Item label="Source Path" required>
+                      <Input
+                        value={payload.source.url ?? ""}
+                        onChange={(e) => updateSource({ url: e.target.value })}
+                        placeholder="/data/my-scripts or /opt/app/lib.py"
+                      />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Form.Item label="Sub-directory (optional)">
+                      <Input
+                        value={payload.source.path ?? ""}
+                        onChange={(e) => updateSource({ path: e.target.value || null })}
+                        placeholder="scripts/jobs"
+                      />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <Alert
+                  type="info"
+                  showIcon
+                  message="The worker will copy the file or directory from the local filesystem into a temporary directory before execution, then clean it up afterwards. Use an absolute path accessible on the worker host."
                   style={{ marginBottom: 12 }}
                 />
               </>

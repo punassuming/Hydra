@@ -107,7 +107,7 @@ export interface CompletionCriteria {
 }
 
 export interface SourceConfig {
-  protocol?: "git";
+  protocol?: "git" | "copy";
   url: string;
   ref?: string;
   path?: string | null;

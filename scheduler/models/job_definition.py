@@ -51,9 +51,9 @@ class CompletionCriteria(BaseModel):
 
 
 class SourceConfig(BaseModel):
-    protocol: Literal["git"] = "git"
-    url: str
-    ref: str = "main"
+    protocol: Literal["git", "copy"] = "git"
+    url: str  # git remote URL for "git" protocol; local filesystem path for "copy" protocol
+    ref: str = "main"  # git only; ignored for "copy" protocol
     path: Optional[str] = None
     credential_ref: Optional[str] = None
 
