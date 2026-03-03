@@ -205,11 +205,12 @@ def execute_job(
                 base_path = os.path.join(base_path, source["path"])
             
             # 3. If executor has a workdir:
-            #    - if absolute, use it (ignores repo, risky but standard behavior)
+            #    - if absolute, treat as relative to the fetched source root
+            #      (strip leading separator so the cloned code is accessible)
             #    - if relative, append to base_path
             if workdir:
                 if os.path.isabs(workdir):
-                    pass # keep as is
+                    workdir = os.path.join(base_path, workdir.lstrip("/\\"))
                 else:
                     workdir = os.path.join(base_path, workdir)
             else:
@@ -230,8 +231,11 @@ def execute_job(
                 command, cleanup = prepare_python_command(executor, job_identifier)
             except Exception as prep_err:
                 return 1, "", str(prep_err)
+            tmp_code = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, prefix="hydra-py-")
             try:
-                cmd_with_code = command + ["-c", code] + args
+                with tmp_code:
+                    tmp_code.write(code)
+                cmd_with_code = command + [tmp_code.name] + args
                 if log_callback_out or log_callback_err:
                     rc, out, err = _run_cmd(_with_impersonation(cmd_with_code))
                 else:
@@ -244,6 +248,10 @@ def execute_job(
                     )
                 return rc, out, err
             finally:
+                try:
+                    os.unlink(tmp_code.name)
+                except OSError:
+                    pass
                 if cleanup:
                     cleanup()
         if exec_type == "external":
@@ -255,10 +263,20 @@ def execute_job(
         if exec_type == "batch":
             script = executor.get("script") or job.get("command", "")
             shell = executor.get("shell", "cmd")
-            cmd = _with_impersonation(["cmd", "/c", script] if shell == "cmd" else [shell, "-c", script])
-            if log_callback_out or log_callback_err:
-                return _run_cmd(cmd)
-            return run_external(binary=cmd[0], args=cmd[1:], timeout=timeout, env=merged_env, workdir=workdir)
+            suffix = ".bat" if shell == "cmd" else ".sh"
+            tmp_script = tempfile.NamedTemporaryFile(mode="w", suffix=suffix, delete=False, prefix="hydra-batch-")
+            try:
+                with tmp_script:
+                    tmp_script.write(script)
+                cmd = _with_impersonation(["cmd", "/c", tmp_script.name] if shell == "cmd" else [shell, tmp_script.name])
+                if log_callback_out or log_callback_err:
+                    return _run_cmd(cmd)
+                return run_external(binary=cmd[0], args=cmd[1:], timeout=timeout, env=merged_env, workdir=workdir)
+            finally:
+                try:
+                    os.unlink(tmp_script.name)
+                except OSError:
+                    pass
         if exec_type == "powershell":
             script = executor.get("script") or job.get("command", "")
             return _execute_powershell(
@@ -274,10 +292,19 @@ def execute_job(
         # default shell executor
         script = executor.get("script") or job.get("command", "")
         shell = executor.get("shell", job.get("shell", "bash"))
-        cmd = _with_impersonation(["/bin/bash", "-lc", script] if shell == "bash" else [shell, "-c", script])
-        if log_callback_out or log_callback_err:
-            return _run_cmd(cmd)
-        return run_external(binary=cmd[0], args=cmd[1:], timeout=timeout, env=merged_env, workdir=workdir)
+        tmp_script = tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False, prefix="hydra-sh-")
+        try:
+            with tmp_script:
+                tmp_script.write(script)
+            cmd = _with_impersonation(["/bin/bash", "-l", tmp_script.name] if shell == "bash" else [shell, tmp_script.name])
+            if log_callback_out or log_callback_err:
+                return _run_cmd(cmd)
+            return run_external(binary=cmd[0], args=cmd[1:], timeout=timeout, env=merged_env, workdir=workdir)
+        finally:
+            try:
+                os.unlink(tmp_script.name)
+            except OSError:
+                pass
     finally:
         if source_cleanup:
             source_cleanup()
