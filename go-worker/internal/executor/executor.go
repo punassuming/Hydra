@@ -10,10 +10,13 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/punassuming/hydra/go-worker/internal/source"
 )
 
 // ---------------------------------------------------------------------------
@@ -114,6 +117,54 @@ func Execute(ctx context.Context, env *JobEnvelope, onStdout, onStderr func(stri
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(env.Job.Timeout)*time.Second)
 		defer cancel()
+	}
+
+	// Source fetching (git/copy/rsync).
+	if src := env.Job.Source; src != nil && src.URL != "" {
+		jobID := env.JobID
+		if jobID == "" {
+			jobID = env.Job.ID
+		}
+		tmpDir, err := os.MkdirTemp("", fmt.Sprintf("hydra-source-%s-", jobID))
+		if err != nil {
+			return &ExecResult{ReturnCode: 1, Stderr: fmt.Sprintf("failed to create source temp dir: %v", err)}
+		}
+		defer os.RemoveAll(tmpDir)
+
+		protocol := src.Protocol
+		if protocol == "" {
+			protocol = "git"
+		}
+		var fetchErr error
+		switch protocol {
+		case "copy":
+			fetchErr = source.FetchCopy(src.URL, tmpDir)
+		case "rsync":
+			fetchErr = source.FetchRsync(src.URL, tmpDir, src.Token)
+		default:
+			sparsePath := ""
+			if src.Sparse {
+				sparsePath = src.Path
+			}
+			fetchErr = source.FetchGit(src.URL, src.Ref, tmpDir, src.Token, sparsePath)
+		}
+		if fetchErr != nil {
+			return &ExecResult{ReturnCode: 1, Stderr: fmt.Sprintf("failed to fetch source: %v", fetchErr)}
+		}
+
+		basePath := tmpDir
+		if src.Path != "" {
+			basePath = filepath.Join(basePath, src.Path)
+		}
+		if workdir != "" {
+			if filepath.IsAbs(workdir) {
+				workdir = filepath.Join(basePath, strings.TrimLeft(workdir, "/\\"))
+			} else {
+				workdir = filepath.Join(basePath, workdir)
+			}
+		} else {
+			workdir = basePath
+		}
 	}
 
 	switch execType {
