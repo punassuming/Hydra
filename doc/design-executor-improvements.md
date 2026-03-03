@@ -1,6 +1,6 @@
 # Design: Executor Improvements — SQL, User Control, Workspace Caching & New Capabilities
 
-**Status:** Draft — Review before implementation  
+**Status:** Implemented (Phases 1–3)  
 **Scope:** Python worker (`worker/`), Go worker (`go-worker/`), Scheduler models (`scheduler/models/`), Scheduler dispatch (`scheduler/scheduler.py`)
 
 ---
@@ -460,14 +460,14 @@ Each step inherits the workspace/env of the previous step. This enables multi-st
 | Python | ✅ (native venv/uv) | ✅ (shells out) | Python worker has richer env support |
 | PowerShell | ✅ | ✅ | Parity |
 | Batch | ✅ (Windows) | ✅ (Windows) | Parity |
-| SQL | ✅ (pymongo/sqlalchemy) | 🔲 **To add** | Go native drivers |
-| HTTP | 🔲 **To add** | 🔲 **To add** | Go has advantage (stdlib) |
+| SQL | ✅ (pymongo/sqlalchemy, max_rows/autocommit) | ✅ (Python bridge) | Both workers have SQL support |
+| HTTP | ✅ (urllib stdlib) | ✅ (net/http stdlib) | Go has native advantage |
 | File Transfer | 🔲 Future | 🔲 Future | Both shell out |
 | Container | 🔲 Future | 🔲 Future | Both shell out or SDK |
 | Pipeline | 🔲 Future | 🔲 Future | Both |
-| Impersonation | ✅ Linux | 🔲 **To add** | Extend to macOS |
-| Kerberos | ✅ Linux | 🔲 **To add** | |
-| Workspace Cache | 🔲 **To add** | 🔲 **To add** | |
+| Impersonation | ✅ Linux + macOS | ✅ Linux + macOS | Cross-platform via sudo |
+| Kerberos | ✅ Linux + macOS | ✅ Linux + macOS | kinit bootstrap |
+| Workspace Cache | ✅ | ✅ | LRU + TTL + size eviction |
 
 ---
 

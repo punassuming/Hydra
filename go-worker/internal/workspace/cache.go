@@ -144,7 +144,8 @@ func cacheKey(src *SourceConfig) string {
 
 func (c *Cache) touch(path string) {
 	sentinel := filepath.Join(path, ".hydra_cache_ts")
-	os.WriteFile(sentinel, []byte(fmt.Sprintf("%f", float64(time.Now().Unix()))), 0644)
+	ts := fmt.Sprintf("%.6f", float64(time.Now().UnixNano())/1e9)
+	os.WriteFile(sentinel, []byte(ts), 0644)
 }
 
 func lastUsed(path string) float64 {

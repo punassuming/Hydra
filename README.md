@@ -16,7 +16,7 @@
 
 | Category | Capabilities |
 |---|---|
-| **Executors** | `shell`, `python`, `batch`, `powershell`, `sql` (Postgres/MySQL/MSSQL/Oracle/MongoDB), `external` |
+| **Executors** | `shell`, `python`, `batch`, `powershell`, `sql` (Postgres/MySQL/MSSQL/Oracle/MongoDB), `http` (REST/webhooks), `external` |
 | **Scheduling** | Immediate, cron (with timezone), interval — with optional `start_at`/`end_at` windows |
 | **Source Provisioning** | Git clone (PAT auth, sparse checkout), local `copy`, SSH `rsync` |
 | **AI Assistance** | Natural-language job generation + run failure analysis via Google Gemini or OpenAI |
@@ -96,14 +96,30 @@ Jobs declare an `executor` block to choose how they run:
 // Python (with isolated venv)
 { "type": "python", "code": "print('hi')", "environment": { "type": "venv", "requirements": ["requests"] } }
 
-// SQL
-{ "type": "sql", "dialect": "postgres", "credential_ref": "my-db", "query": "SELECT 1" }
+// SQL (with row limits and transaction control)
+{ "type": "sql", "dialect": "postgres", "credential_ref": "my-db", "query": "SELECT 1", "max_rows": 10000, "autocommit": true }
+
+// HTTP (REST triggers, webhooks, health checks)
+{ "type": "http", "method": "POST", "url": "https://api.example.com/trigger", "headers": {"Content-Type": "application/json"}, "body": "{\"key\": \"value\"}", "expected_status": [200, 201] }
 
 // PowerShell (Windows workers)
 { "type": "powershell", "script": "Get-Date" }
 ```
 
-All executor types support `env`, `args`, `workdir`, `impersonate_user` (Linux), and Kerberos pre-auth.
+All executor types support `env`, `args`, `workdir`, `impersonate_user` (Linux/macOS), and Kerberos pre-auth.
+
+### Workspace Caching
+
+Source workspaces are cached per-worker to avoid repeated git clones and file copies. Configure via:
+
+| Variable | Default | Description |
+|---|---|---|
+| `WORKER_WORKSPACE_CACHE_DIR` | OS temp dir | Cache root directory |
+| `WORKER_WORKSPACE_CACHE_MAX_MB` | `1024` | Max total cache size (MB) |
+| `WORKER_WORKSPACE_CACHE_TTL` | `3600` | Cache entry TTL (seconds) |
+| `WORKER_WORKSPACE_CACHE_PERSIST` | `true` | Keep cache across restarts |
+
+Per-job cache control via `source.cache`: `"auto"` (default), `"always"`, `"never"`.
 
 ---
 

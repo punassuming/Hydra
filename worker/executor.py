@@ -129,19 +129,33 @@ def _execute_sql(executor: dict, timeout, merged_env, workdir,
             "with engine.connect() as conn:\n"
         )
         if not autocommit:
-            driver_code += "    trans = conn.begin()\n"
-        driver_code += (
-            f"    result = conn.execute(text({query!r}))\n"
-            "    try:\n"
-            "        rows = [dict(r._mapping) for r in result]\n"
-            f"        truncated = len(rows) > {max_rows}\n"
-            f"        rows = rows[:{max_rows}]\n"
-            '        print(json.dumps({"rows": rows, "row_count": len(rows), "truncated": truncated}, default=str))\n'
-            "    except Exception:\n"
-            '        print(json.dumps({"rows": [], "row_count": 0, "truncated": False, "message": "query executed (no result set)"}, default=str))\n'
-        )
-        if not autocommit:
-            driver_code += "    trans.commit()\n"
+            driver_code += (
+                "    trans = conn.begin()\n"
+                "    try:\n"
+                f"        result = conn.execute(text({query!r}))\n"
+                "        try:\n"
+                "            rows = [dict(r._mapping) for r in result]\n"
+                f"            truncated = len(rows) > {max_rows}\n"
+                f"            rows = rows[:{max_rows}]\n"
+                '            print(json.dumps({"rows": rows, "row_count": len(rows), "truncated": truncated}, default=str))\n'
+                "        except Exception:\n"
+                '            print(json.dumps({"rows": [], "row_count": 0, "truncated": False, "message": "query executed (no result set)"}, default=str))\n'
+                "        trans.commit()\n"
+                "    except Exception as e:\n"
+                "        trans.rollback()\n"
+                "        raise\n"
+            )
+        else:
+            driver_code += (
+                f"    result = conn.execute(text({query!r}))\n"
+                "    try:\n"
+                "        rows = [dict(r._mapping) for r in result]\n"
+                f"        truncated = len(rows) > {max_rows}\n"
+                f"        rows = rows[:{max_rows}]\n"
+                '        print(json.dumps({"rows": rows, "row_count": len(rows), "truncated": truncated}, default=str))\n'
+                "    except Exception:\n"
+                '        print(json.dumps({"rows": [], "row_count": 0, "truncated": False, "message": "query executed (no result set)"}, default=str))\n'
+            )
 
     # Write to temp file and execute
     tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, prefix="hydra-sql-")

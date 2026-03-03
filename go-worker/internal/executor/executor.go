@@ -392,11 +392,37 @@ func execSQL(ctx context.Context, spec *ExecutorSpec, env map[string]string, onS
 			connURI, database, database, query,
 		)
 	} else {
-		beginTrans := ""
-		commitTrans := ""
+		var queryBlock string
 		if !autocommit {
-			beginTrans = "    trans = conn.begin()\n"
-			commitTrans = "    trans.commit()\n"
+			queryBlock = fmt.Sprintf(
+				"    trans = conn.begin()\n"+
+					"    try:\n"+
+					"        result = conn.execute(text(%q))\n"+
+					"        try:\n"+
+					"            rows = [dict(r._mapping) for r in result]\n"+
+					"            truncated = len(rows) > %d\n"+
+					"            rows = rows[:%d]\n"+
+					"            print(json.dumps({\"rows\": rows, \"row_count\": len(rows), \"truncated\": truncated}, default=str))\n"+
+					"        except Exception:\n"+
+					"            print(json.dumps({\"rows\": [], \"row_count\": 0, \"truncated\": False, \"message\": \"query executed (no result set)\"}, default=str))\n"+
+					"        trans.commit()\n"+
+					"    except Exception as e:\n"+
+					"        trans.rollback()\n"+
+					"        raise\n",
+				query, maxRows, maxRows,
+			)
+		} else {
+			queryBlock = fmt.Sprintf(
+				"    result = conn.execute(text(%q))\n"+
+					"    try:\n"+
+					"        rows = [dict(r._mapping) for r in result]\n"+
+					"        truncated = len(rows) > %d\n"+
+					"        rows = rows[:%d]\n"+
+					"        print(json.dumps({\"rows\": rows, \"row_count\": len(rows), \"truncated\": truncated}, default=str))\n"+
+					"    except Exception:\n"+
+					"        print(json.dumps({\"rows\": [], \"row_count\": 0, \"truncated\": False, \"message\": \"query executed (no result set)\"}, default=str))\n",
+				query, maxRows, maxRows,
+			)
 		}
 		driverCode = fmt.Sprintf(
 			"import json, sys\n"+
@@ -406,17 +432,8 @@ func execSQL(ctx context.Context, spec *ExecutorSpec, env map[string]string, onS
 				"    print('sqlalchemy is not installed on this worker', file=sys.stderr); sys.exit(1)\n"+
 				"engine = create_engine(%q)\n"+
 				"with engine.connect() as conn:\n"+
-				"%s"+
-				"    result = conn.execute(text(%q))\n"+
-				"    try:\n"+
-				"        rows = [dict(r._mapping) for r in result]\n"+
-				"        truncated = len(rows) > %d\n"+
-				"        rows = rows[:%d]\n"+
-				"        print(json.dumps({\"rows\": rows, \"row_count\": len(rows), \"truncated\": truncated}, default=str))\n"+
-				"    except Exception:\n"+
-				"        print(json.dumps({\"rows\": [], \"row_count\": 0, \"truncated\": False, \"message\": \"query executed (no result set)\"}, default=str))\n"+
 				"%s",
-			connURI, beginTrans, query, maxRows, maxRows, commitTrans,
+			connURI, queryBlock,
 		)
 	}
 

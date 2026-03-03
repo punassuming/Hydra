@@ -84,7 +84,7 @@ class WorkspaceCache:
                 self._touch(cache_path)
                 if cache_mode == "always":
                     pass  # never re-fetch
-                elif (source_config.get("protocol") or "git") == "git":
+                elif source_config.get("protocol", "git") == "git":
                     self._git_update(cache_path, source_config)
             elif cache_mode == "always":
                 raise FileNotFoundError(

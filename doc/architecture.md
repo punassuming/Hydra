@@ -7,7 +7,7 @@
 | **Scheduler** | FastAPI service: REST API, job orchestration, scheduling, failover, and persistence |
 | **Redis** | Message bus: job queues, worker coordination, heartbeats, log streaming, run events |
 | **MongoDB** | Durable store: domains, job definitions, run history, credentials |
-| **Workers** | Execution agents: Redis-only at runtime — receive jobs, run them, emit events |
+| **Workers** | Execution agents: Redis-only at runtime — receive jobs, run them, emit events. Available in Python and Go with feature parity. |
 | **UI** | React frontend: monitors jobs/workers/runs via scheduler REST API and SSE |
 
 ## Architecture Diagram
@@ -98,3 +98,31 @@ flowchart TB
 - Each domain has its own **Redis ACL user** (username = domain name). Workers can only access keys and channels scoped to their domain.
 - The scheduler's admin token grants cross-domain access; domain tokens scope all other requests.
 - **Credentials** (DB URIs, PAT tokens, SMTP passwords) are encrypted in MongoDB and resolved at dispatch time by the scheduler. Workers receive them in the job envelope — they are never returned via the API.
+
+## Executor Types
+
+Both Python and Go workers support the following executor types:
+
+| Type | Description | Notes |
+|---|---|---|
+| `shell` | Run a shell script (bash/sh) | Default executor |
+| `external` | Run an external binary | Direct command execution |
+| `python` | Run inline Python code | Python worker has venv/uv support |
+| `powershell` | Run PowerShell scripts | Requires pwsh or powershell |
+| `batch` | Run Windows batch scripts | Windows only |
+| `sql` | Execute SQL queries | Supports postgres, mysql, mssql, oracle, mongodb; uses credential_ref for secrets |
+| `http` | Make HTTP requests | REST triggers, webhooks, health checks; supports credential_ref for auth |
+
+### Cross-Platform User Control
+
+- **Impersonation**: Jobs can specify `executor.impersonate_user` to run commands as a different user via `sudo -n -u <user>` (Linux/macOS). The scheduler enforces OS affinity — impersonation jobs only dispatch to Linux/macOS workers.
+- **Kerberos**: Jobs can specify `executor.kerberos` with `principal`, `keytab`, and optional `ccache` for Kerberos authentication bootstrap before execution.
+- **Windows**: Use the service account model — run workers as the target user and use `allowed_users` affinity for routing.
+
+### Workspace Caching
+
+Workers maintain a persistent cache directory for source workspaces. Cache entries are keyed by `(url, ref, path, protocol)` hash and support:
+- **LRU eviction** with configurable max size (`WORKER_WORKSPACE_CACHE_MAX_MB`)
+- **TTL-based expiry** (`WORKER_WORKSPACE_CACHE_TTL`)
+- **Git fast-update** (fetch + checkout instead of full clone on cache hit)
+- **Cache modes** per job: `auto` (default), `always`, `never`
