@@ -274,3 +274,212 @@ def test_absolute_workdir_treated_as_relative_to_source(monkeypatch, tmp_path):
     rc, out, err = execute_job(job)
     assert rc == 0, f"stderr: {err}"
     assert "found-it" in out
+
+
+# ---------------------------------------------------------------------------
+# SQL executor improvements
+# ---------------------------------------------------------------------------
+
+def test_sql_executor_requires_query():
+    """SQL executor should fail with empty query."""
+    job = {"executor": {"type": "sql", "dialect": "postgres", "connection_uri": "postgresql://localhost/test", "query": ""}}
+    rc, out, err = execute_job(job)
+    assert rc == 1
+    assert "non-empty query" in err
+
+
+def test_sql_executor_requires_connection_uri():
+    """SQL executor should fail without connection_uri."""
+    job = {"executor": {"type": "sql", "dialect": "postgres", "query": "SELECT 1"}}
+    rc, out, err = execute_job(job)
+    assert rc == 1
+    assert "connection_uri" in err
+
+
+def test_detect_capabilities_includes_http():
+    """Worker capabilities should always include 'http'."""
+    from worker.executor import _detect_capabilities
+    caps = _detect_capabilities()
+    assert "http" in caps
+    assert "shell" in caps
+    assert "external" in caps
+
+
+def test_detect_capabilities_sql_depends_on_drivers():
+    """SQL should only be advertised if sqlalchemy or pymongo is available."""
+    from worker.executor import _detect_capabilities
+    caps = _detect_capabilities()
+    # pymongo is installed from scheduler requirements, so sql should be present
+    assert "sql" in caps
+
+
+# ---------------------------------------------------------------------------
+# HTTP executor
+# ---------------------------------------------------------------------------
+
+def test_http_executor_requires_url():
+    """HTTP executor should fail with empty URL."""
+    job = {"executor": {"type": "http", "url": ""}}
+    rc, out, err = execute_job(job)
+    assert rc == 1
+    assert "url" in err.lower()
+
+
+def test_http_executor_connection_refused():
+    """HTTP executor should handle connection failures gracefully."""
+    job = {"executor": {"type": "http", "url": "http://127.0.0.1:1", "timeout_seconds": 2}}
+    rc, out, err = execute_job(job)
+    assert rc == 1
+    assert "failed" in err.lower() or "refused" in err.lower() or "error" in err.lower()
+
+
+# ---------------------------------------------------------------------------
+# Impersonation
+# ---------------------------------------------------------------------------
+
+def test_impersonation_supported_on_linux():
+    """On Linux, impersonation should be accepted (though sudo may fail without config)."""
+    if platform.system().lower() != "linux":
+        return
+    job = {
+        "executor": {
+            "type": "shell",
+            "script": "echo hello",
+            "shell": "bash",
+            "impersonate_user": "nonexistent_user_hydra_test",
+        },
+        "timeout": 5,
+    }
+    rc, out, err = execute_job(job)
+    # Should fail because sudo is not configured, but NOT because of platform check
+    assert "not supported" not in err.lower() or "only on" not in err.lower()
+
+
+# ---------------------------------------------------------------------------
+# Workspace cache
+# ---------------------------------------------------------------------------
+
+def test_workspace_cache_basic(tmp_path):
+    """Workspace cache should create and reuse cache entries."""
+    from worker.utils.workspace_cache import WorkspaceCache
+    import os
+
+    cache = WorkspaceCache(cache_root=str(tmp_path / "cache"), max_mb=100, ttl_seconds=3600)
+
+    fetch_count = [0]
+    def mock_fetch(dest, src_cfg):
+        fetch_count[0] += 1
+        with open(os.path.join(dest, "file.txt"), "w") as f:
+            f.write("hello")
+
+    source = {"url": "https://example.com/repo.git", "ref": "main", "protocol": "git", "cache": "auto"}
+
+    # First call should fetch
+    path1, release1 = cache.get_or_create("prod", "job1", source, mock_fetch)
+    assert os.path.isfile(os.path.join(path1, "file.txt"))
+    assert fetch_count[0] == 1
+    release1()
+
+    # Second call should reuse cache (fetch_count stays 1)
+    path2, release2 = cache.get_or_create("prod", "job1", source, mock_fetch)
+    assert path1 == path2
+    assert fetch_count[0] == 1  # No new fetch
+    release2()
+
+
+def test_workspace_cache_never_mode(tmp_path):
+    """cache='never' should always create a fresh temp directory."""
+    from worker.utils.workspace_cache import WorkspaceCache
+    import os
+
+    cache = WorkspaceCache(cache_root=str(tmp_path / "cache"), max_mb=100, ttl_seconds=3600)
+
+    def mock_fetch(dest, src_cfg):
+        with open(os.path.join(dest, "file.txt"), "w") as f:
+            f.write("hello")
+
+    source = {"url": "https://example.com/repo.git", "ref": "main", "protocol": "git", "cache": "never"}
+
+    path1, release1 = cache.get_or_create("prod", "job1", source, mock_fetch)
+    assert os.path.isfile(os.path.join(path1, "file.txt"))
+
+    path2, release2 = cache.get_or_create("prod", "job1", source, mock_fetch)
+    assert path1 != path2  # Different temp dirs
+    assert os.path.isfile(os.path.join(path2, "file.txt"))
+
+    release1()
+    release2()
+    # After release, never-mode dirs should be cleaned up
+    assert not os.path.exists(path1)
+    assert not os.path.exists(path2)
+
+
+def test_workspace_cache_always_mode_miss(tmp_path):
+    """cache='always' should raise FileNotFoundError if cache doesn't exist."""
+    from worker.utils.workspace_cache import WorkspaceCache
+    import pytest
+
+    cache = WorkspaceCache(cache_root=str(tmp_path / "cache"), max_mb=100, ttl_seconds=3600)
+
+    source = {"url": "https://example.com/repo.git", "ref": "main", "protocol": "git", "cache": "always"}
+
+    with pytest.raises(FileNotFoundError, match="always"):
+        cache.get_or_create("prod", "job1", source, lambda d, s: None)
+
+
+# ---------------------------------------------------------------------------
+# Scheduler model updates
+# ---------------------------------------------------------------------------
+
+def test_sql_executor_model_new_fields():
+    """SqlExecutor model should accept max_rows and autocommit."""
+    from scheduler.models.executor import SqlExecutor
+    sql = SqlExecutor(query="SELECT 1", dialect="postgres", max_rows=500, autocommit=False)
+    assert sql.max_rows == 500
+    assert sql.autocommit is False
+
+    sql_default = SqlExecutor(query="SELECT 1")
+    assert sql_default.max_rows == 10000
+    assert sql_default.autocommit is True
+
+
+def test_http_executor_model():
+    """HttpExecutor model should validate required fields."""
+    from scheduler.models.executor import HttpExecutor
+    http = HttpExecutor(url="https://example.com", method="POST", body='{"key": "value"}')
+    assert http.method == "POST"
+    assert http.url == "https://example.com"
+    assert http.timeout_seconds == 30
+    assert http.expected_status == [200]
+
+
+def test_source_config_cache_field():
+    """SourceConfig should have a cache field defaulting to 'auto'."""
+    from scheduler.models.job_definition import SourceConfig
+    src = SourceConfig(url="https://github.com/test/repo.git")
+    assert src.cache == "auto"
+
+    src_never = SourceConfig(url="https://github.com/test/repo.git", cache="never")
+    assert src_never.cache == "never"
+
+
+def test_affinity_impersonation_check():
+    """Jobs with impersonate_user should only match Linux/macOS workers."""
+    from scheduler.utils.affinity import passes_affinity
+
+    job_with_impersonation = {
+        "user": "alice",
+        "executor": {"impersonate_user": "bob"},
+        "affinity": {},
+    }
+    worker_linux = {"os": "linux", "allowed_users": [], "tags": [], "hostname": "", "subnet": "", "deployment_type": "", "capabilities": []}
+    worker_darwin = {"os": "darwin", "allowed_users": [], "tags": [], "hostname": "", "subnet": "", "deployment_type": "", "capabilities": []}
+    worker_windows = {"os": "windows", "allowed_users": [], "tags": [], "hostname": "", "subnet": "", "deployment_type": "", "capabilities": []}
+
+    assert passes_affinity(job_with_impersonation, worker_linux)
+    assert passes_affinity(job_with_impersonation, worker_darwin)
+    assert not passes_affinity(job_with_impersonation, worker_windows)
+
+    # Jobs without impersonation should work on any OS
+    job_no_impersonation = {"user": "alice", "executor": {}, "affinity": {}}
+    assert passes_affinity(job_no_impersonation, worker_windows)
