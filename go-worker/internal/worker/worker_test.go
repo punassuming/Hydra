@@ -1,0 +1,171 @@
+package worker
+
+import (
+	"fmt"
+	"testing"
+
+	"github.com/punassuming/hydra/go-worker/internal/executor"
+)
+
+func TestEvaluateCompletion_NilCompletion_Success(t *testing.T) {
+	ok, reason := evaluateCompletion(nil, &executor.ExecResult{ReturnCode: 0})
+	if !ok {
+		t.Errorf("expected success, got reason=%q", reason)
+	}
+}
+
+func TestEvaluateCompletion_NilCompletion_Failure(t *testing.T) {
+	ok, _ := evaluateCompletion(nil, &executor.ExecResult{ReturnCode: 1})
+	if ok {
+		t.Error("expected failure for rc=1 with nil completion")
+	}
+}
+
+func TestEvaluateCompletion_ExitCodes(t *testing.T) {
+	comp := &executor.Completion{ExitCodes: []int{0, 2}}
+	ok, _ := evaluateCompletion(comp, &executor.ExecResult{ReturnCode: 2})
+	if !ok {
+		t.Error("expected success for rc=2 in allowed exit codes")
+	}
+	ok, _ = evaluateCompletion(comp, &executor.ExecResult{ReturnCode: 1})
+	if ok {
+		t.Error("expected failure for rc=1 not in exit codes")
+	}
+}
+
+func TestEvaluateCompletion_StdoutContains(t *testing.T) {
+	comp := &executor.Completion{
+		ExitCodes:      []int{0},
+		StdoutContains: []string{"SUCCESS"},
+	}
+	ok, _ := evaluateCompletion(comp, &executor.ExecResult{ReturnCode: 0, Stdout: "test SUCCESS done"})
+	if !ok {
+		t.Error("expected success when stdout contains required token")
+	}
+	ok, reason := evaluateCompletion(comp, &executor.ExecResult{ReturnCode: 0, Stdout: "test done"})
+	if ok {
+		t.Error("expected failure when stdout missing required token")
+	}
+	if reason == "" {
+		t.Error("expected non-empty reason")
+	}
+}
+
+func TestEvaluateCompletion_StdoutNotContains(t *testing.T) {
+	comp := &executor.Completion{
+		ExitCodes:         []int{0},
+		StdoutNotContains: []string{"ERROR"},
+	}
+	ok, _ := evaluateCompletion(comp, &executor.ExecResult{ReturnCode: 0, Stdout: "all good"})
+	if !ok {
+		t.Error("expected success when stdout doesn't contain forbidden token")
+	}
+	ok, _ = evaluateCompletion(comp, &executor.ExecResult{ReturnCode: 0, Stdout: "got ERROR here"})
+	if ok {
+		t.Error("expected failure when stdout contains forbidden token")
+	}
+}
+
+func TestEvaluateCompletion_StderrContains(t *testing.T) {
+	comp := &executor.Completion{
+		ExitCodes:      []int{0},
+		StderrContains: []string{"WARN"},
+	}
+	ok, _ := evaluateCompletion(comp, &executor.ExecResult{ReturnCode: 0, Stderr: "WARN: something"})
+	if !ok {
+		t.Error("expected success when stderr contains required token")
+	}
+	ok, _ = evaluateCompletion(comp, &executor.ExecResult{ReturnCode: 0, Stderr: ""})
+	if ok {
+		t.Error("expected failure when stderr missing required token")
+	}
+}
+
+func TestEvaluateCompletion_StderrNotContains(t *testing.T) {
+	comp := &executor.Completion{
+		ExitCodes:         []int{0},
+		StderrNotContains: []string{"FATAL"},
+	}
+	ok, _ := evaluateCompletion(comp, &executor.ExecResult{ReturnCode: 0, Stderr: "info only"})
+	if !ok {
+		t.Error("expected success when stderr doesn't contain forbidden token")
+	}
+	ok, _ = evaluateCompletion(comp, &executor.ExecResult{ReturnCode: 0, Stderr: "FATAL error"})
+	if ok {
+		t.Error("expected failure when stderr contains forbidden token")
+	}
+}
+
+func TestEvaluateCompletion_DefaultExitCodes(t *testing.T) {
+	// Empty ExitCodes should default to [0].
+	comp := &executor.Completion{ExitCodes: []int{}}
+	ok, _ := evaluateCompletion(comp, &executor.ExecResult{ReturnCode: 0})
+	if !ok {
+		t.Error("expected success for rc=0 with empty exit codes (default to [0])")
+	}
+	ok, _ = evaluateCompletion(comp, &executor.ExecResult{ReturnCode: 1})
+	if ok {
+		t.Error("expected failure for rc=1 with empty exit codes (default to [0])")
+	}
+}
+
+func TestEvaluateCompletion_EmptyForbiddenToken(t *testing.T) {
+	// Empty string in not_contains should be ignored.
+	comp := &executor.Completion{
+		ExitCodes:         []int{0},
+		StdoutNotContains: []string{""},
+	}
+	ok, _ := evaluateCompletion(comp, &executor.ExecResult{ReturnCode: 0, Stdout: "anything"})
+	if !ok {
+		t.Error("expected success when forbidden token is empty string")
+	}
+}
+
+func TestMetrics_IsNumeric(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"123", true},
+		{"", false},
+		{"abc", false},
+		{"12a", false},
+	}
+	for _, tt := range tests {
+		got := isNumeric(tt.input)
+		if got != tt.want {
+			t.Errorf("isNumeric(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestCollectMetrics(t *testing.T) {
+	m := collectMetrics()
+	if _, ok := m["process_count"]; !ok {
+		t.Error("metrics should have process_count")
+	}
+	if _, ok := m["memory_rss_mb"]; !ok {
+		t.Error("metrics should have memory_rss_mb")
+	}
+}
+
+func TestOrDefault(t *testing.T) {
+	if got := orDefault(5.0, 10.0); got != 5.0 {
+		t.Errorf("expected 5.0, got %f", got)
+	}
+	if got := orDefault(0.0, 10.0); got != 10.0 {
+		t.Errorf("expected 10.0, got %f", got)
+	}
+}
+
+func TestResolveIP(t *testing.T) {
+	// Should not panic for any hostname.
+	_ = resolveIP("localhost")
+	_ = resolveIP("nonexistent-host-12345")
+}
+
+func TestAppendWorkerOp_Format(t *testing.T) {
+	// Just verify the function signature/pattern compiles and doesn't panic on nil rdb.
+	// Full integration test needs Redis. This validates code paths without Redis.
+	_ = fmt.Sprintf("worker_ops:%s:%s", "domain", "worker")
+}

@@ -25,7 +25,7 @@ func main() {
 		log.Fatalf("configuration error: %v", err)
 	}
 
-	rdb, err := redisclient.New(cfg.RedisURL, cfg.RedisPassword)
+	rdb, err := redisclient.New(cfg.RedisURL, cfg.RedisPassword, cfg.Domain)
 	if err != nil {
 		log.Fatalf("redis connection error: %v", err)
 	}
