@@ -221,3 +221,56 @@ def test_git_sparse_clone_calls(monkeypatch):
     cmd_strs = [" ".join(c) for c in calls]
     assert any("sparse-checkout" in s for s in cmd_strs), f"Expected sparse-checkout in commands: {cmd_strs}"
     assert any("init" in s for s in cmd_strs), f"Expected git init in commands: {cmd_strs}"
+
+
+def test_python_executor_uses_temp_file():
+    """Large inline code should run without hitting command-line length limits."""
+    # Build a script larger than typical ARG_MAX limits would allow via -c
+    many_lines = "\n".join(f"x_{i} = {i}" for i in range(500))
+    code = many_lines + "\nprint('large-ok')"
+    job = {"executor": {"type": "python", "code": code, "interpreter": "python3"}, "timeout": 10}
+    rc, out, _ = execute_job(job)
+    assert rc == 0
+    assert "large-ok" in out
+
+
+def test_shell_executor_uses_temp_file():
+    """Large inline shell script should run without hitting command-line length limits."""
+    many_vars = "\n".join(f"V{i}={i}" for i in range(200))
+    script = many_vars + "\necho shell-large-ok"
+    job = {"executor": {"type": "shell", "script": script, "shell": "bash"}, "timeout": 10}
+    rc, out, _ = execute_job(job)
+    assert rc == 0
+    assert "shell-large-ok" in out
+
+
+def test_absolute_workdir_treated_as_relative_to_source(monkeypatch, tmp_path):
+    """An absolute workdir should be resolved relative to the fetched source root."""
+    from worker.utils.copy import fetch_copy_source as real_fetch
+
+    # Create a fake source tree: tmp_path/src/ with subdir/ containing a sentinel file
+    src_dir = tmp_path / "src"
+    subdir = src_dir / "mysubdir"
+    subdir.mkdir(parents=True)
+    (subdir / "sentinel.txt").write_text("found-it")
+
+    # Patch fetch_copy_source to copy our fake source into the temp dir
+    def _fake_fetch(url, dest):
+        real_fetch(str(src_dir), dest)
+
+    monkeypatch.setattr("worker.executor.fetch_copy_source", _fake_fetch)
+
+    # Use an absolute workdir of /mysubdir — should be treated as relative to source root
+    job = {
+        "source": {"protocol": "copy", "url": str(src_dir)},
+        "executor": {
+            "type": "shell",
+            "script": "cat sentinel.txt",
+            "shell": "bash",
+            "workdir": "/mysubdir",
+        },
+        "timeout": 5,
+    }
+    rc, out, err = execute_job(job)
+    assert rc == 0, f"stderr: {err}"
+    assert "found-it" in out
