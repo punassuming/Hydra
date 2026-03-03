@@ -99,7 +99,7 @@ class JobCreate(BaseModel):
     domain: str = "prod"
     bypass_concurrency: bool = False
     source: Optional[SourceConfig] = None
-    affinity: Affinity
+    affinity: Affinity = Field(default_factory=Affinity)
     executor: ExecutorConfig = Field(default_factory=lambda: ShellExecutor(script=""))
     retries: int = 0
     timeout: int = 0
