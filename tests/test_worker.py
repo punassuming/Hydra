@@ -103,3 +103,121 @@ def test_completion_helpers_are_strict():
     assert success
     success, reason = _contains_none("abc def", ["abc"])
     assert not success and "forbidden" in reason.lower()
+
+
+def test_git_token_injection_https():
+    from worker.utils.git import _inject_token_into_url
+    url = "https://github.com/user/repo.git"
+    result = _inject_token_into_url(url, "mytoken")
+    assert "x-oauth-token:mytoken@github.com" in result
+    assert result.startswith("https://")
+
+
+def test_git_token_injection_ssh_passthrough():
+    from worker.utils.git import _inject_token_into_url
+    url = "git@github.com:user/repo.git"
+    result = _inject_token_into_url(url, "mytoken")
+    # SSH URLs should pass through unchanged
+    assert result == url
+
+
+def test_git_token_injection_empty_token():
+    from worker.utils.git import _inject_token_into_url
+    url = "https://github.com/user/repo.git"
+    result = _inject_token_into_url(url, "")
+    assert result == url
+
+
+def test_copy_source_directory():
+    import tempfile, os
+    from worker.utils.copy import fetch_copy_source
+    with tempfile.TemporaryDirectory() as src_dir:
+        open(os.path.join(src_dir, "run.sh"), "w").write("echo hello")
+        sub = os.path.join(src_dir, "subdir")
+        os.makedirs(sub)
+        open(os.path.join(sub, "data.txt"), "w").write("data")
+        with tempfile.TemporaryDirectory() as dest_dir:
+            fetch_copy_source(src_dir, dest_dir)
+            assert os.path.isfile(os.path.join(dest_dir, "run.sh"))
+            assert os.path.isfile(os.path.join(dest_dir, "subdir", "data.txt"))
+
+
+def test_copy_source_single_file():
+    import tempfile, os
+    from worker.utils.copy import fetch_copy_source
+    with tempfile.NamedTemporaryFile(suffix=".sh", delete=False) as f:
+        f.write(b"echo hi")
+        src_file = f.name
+    try:
+        with tempfile.TemporaryDirectory() as dest_dir:
+            fetch_copy_source(src_file, dest_dir)
+            assert os.path.isfile(os.path.join(dest_dir, os.path.basename(src_file)))
+    finally:
+        os.unlink(src_file)
+
+
+def test_copy_source_missing_raises():
+    import tempfile, pytest
+    from worker.utils.copy import fetch_copy_source
+    with tempfile.TemporaryDirectory() as dest_dir:
+        with pytest.raises(FileNotFoundError):
+            fetch_copy_source("/nonexistent/path/that/does/not/exist", dest_dir)
+
+
+def test_copy_source_rejects_relative_path():
+    import tempfile, pytest
+    from worker.utils.copy import fetch_copy_source
+    with tempfile.TemporaryDirectory() as dest_dir:
+        with pytest.raises(ValueError, match="absolute"):
+            fetch_copy_source("relative/path", dest_dir)
+
+
+def test_rsync_source_builds_command(monkeypatch):
+    """Verify fetch_rsync_source builds the correct rsync command."""
+    import subprocess
+    from worker.utils.rsync import fetch_rsync_source
+
+    captured = {}
+    def mock_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    fetch_rsync_source("user@host:/data/files", "/tmp/dest")
+    assert captured["cmd"][0] == "rsync"
+    assert "-az" in captured["cmd"]
+    assert "user@host:/data/files/" in captured["cmd"]
+    assert "/tmp/dest/" in captured["cmd"]
+
+
+def test_rsync_source_with_ssh_key(monkeypatch):
+    """Verify SSH key is passed via -e flag when credential_ref_token is provided."""
+    import subprocess
+    from worker.utils.rsync import fetch_rsync_source
+
+    captured = {}
+    def mock_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    fetch_rsync_source("user@host:/data/files", "/tmp/dest", credential_ref_token="/path/to/key")
+    assert any("/path/to/key" in str(c) for c in captured["cmd"])
+
+
+def test_git_sparse_clone_calls(monkeypatch):
+    """Verify that fetch_git_source with sparse_path uses sparse-checkout commands."""
+    import subprocess
+    from worker.utils.git import fetch_git_source
+
+    calls = []
+    def mock_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    fetch_git_source("https://github.com/org/repo.git", "main", "/tmp/dest", sparse_path="services/my-svc")
+    # Should contain git init, git remote add, git sparse-checkout set, git fetch, git checkout
+    cmd_strs = [" ".join(c) for c in calls]
+    assert any("sparse-checkout" in s for s in cmd_strs), f"Expected sparse-checkout in commands: {cmd_strs}"
+    assert any("init" in s for s in cmd_strs), f"Expected git init in commands: {cmd_strs}"

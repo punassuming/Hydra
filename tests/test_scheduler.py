@@ -131,3 +131,57 @@ def test_build_dependency_graph_includes_missing_dependency_node():
     node_ids, edges = _build_dependency_graph(jobs, "b")
     assert set(node_ids) == {"b", "missing-id"}
     assert edges == [{"source": "missing-id", "target": "b"}]
+
+
+def test_source_config_model_fields():
+    from scheduler.models.job_definition import SourceConfig
+    # Basic git source
+    s = SourceConfig(url="https://github.com/user/repo.git")
+    assert s.protocol == "git"
+    assert s.ref == "main"
+    assert s.path is None
+    assert s.credential_ref is None
+
+    # With all fields
+    s2 = SourceConfig(url="https://github.com/user/repo.git", ref="v1.0", path="scripts", credential_ref="my-pat")
+    assert s2.path == "scripts"
+    assert s2.credential_ref == "my-pat"
+
+
+def test_job_definition_with_source():
+    from scheduler.models.job_definition import JobDefinition, SourceConfig
+    from scheduler.models.executor import ShellExecutor
+    job = JobDefinition(
+        name="sourced-job",
+        user="tester",
+        affinity=Affinity(),
+        executor=ShellExecutor(script="./run.sh"),
+        source=SourceConfig(url="https://github.com/user/repo.git", ref="main", path="jobs"),
+    )
+    assert job.source is not None
+    assert job.source.url == "https://github.com/user/repo.git"
+    assert job.source.path == "jobs"
+
+
+def test_source_config_copy_protocol():
+    from scheduler.models.job_definition import SourceConfig
+    s = SourceConfig(protocol="copy", url="/opt/jobs/my-project")
+    assert s.protocol == "copy"
+    assert s.url == "/opt/jobs/my-project"
+    assert s.credential_ref is None  # not needed for local copies
+
+
+def test_source_config_rsync_protocol():
+    from scheduler.models.job_definition import SourceConfig
+    s = SourceConfig(protocol="rsync", url="deploy@build-server:/opt/artifacts/latest")
+    assert s.protocol == "rsync"
+    assert s.url == "deploy@build-server:/opt/artifacts/latest"
+    assert s.sparse is False
+
+
+def test_source_config_git_sparse():
+    from scheduler.models.job_definition import SourceConfig
+    s = SourceConfig(url="https://github.com/org/monorepo.git", path="services/my-svc", sparse=True)
+    assert s.protocol == "git"
+    assert s.sparse is True
+    assert s.path == "services/my-svc"

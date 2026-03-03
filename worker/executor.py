@@ -7,6 +7,8 @@ import platform
 from .utils.os_exec import run_external, _run_with_callbacks
 from .utils.python_env import prepare_python_command
 from .utils.git import fetch_git_source
+from .utils.copy import fetch_copy_source
+from .utils.rsync import fetch_rsync_source
 
 
 def _detect_shells() -> list[str]:
@@ -187,7 +189,14 @@ def execute_job(
     if source and source.get("url"):
         tmp_source_dir = tempfile.mkdtemp(prefix=f"hydra-source-{job_identifier}-")
         try:
-            fetch_git_source(source["url"], source.get("ref", "main"), tmp_source_dir)
+            protocol = source.get("protocol") or "git"
+            if protocol == "copy":
+                fetch_copy_source(source["url"], tmp_source_dir)
+            elif protocol == "rsync":
+                fetch_rsync_source(source["url"], tmp_source_dir, credential_ref_token=source.get("token") or "")
+            else:
+                sparse_path = source.get("path", "") if source.get("sparse") else ""
+                fetch_git_source(source["url"], source.get("ref", "main"), tmp_source_dir, token=source.get("token") or "", sparse_path=sparse_path)
             # Determine effective workdir
             # 1. Start at repo root
             base_path = tmp_source_dir
