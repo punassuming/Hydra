@@ -3,12 +3,14 @@ import tempfile
 import shutil
 import os
 import platform
+import json
 
 from .utils.os_exec import run_external, _run_with_callbacks
 from .utils.python_env import prepare_python_command
 from .utils.git import fetch_git_source
 from .utils.copy import fetch_copy_source
 from .utils.rsync import fetch_rsync_source
+from .utils.workspace_cache import get_workspace_cache
 
 
 def _detect_shells() -> list[str]:
@@ -58,8 +60,22 @@ def _detect_capabilities() -> list[str]:
     is_win = platform.system().lower().startswith("win")
     if is_win:
         caps.append("batch")
-    # sql - always advertise; driver availability checked at runtime
-    caps.append("sql")
+    # sql - only advertise if at least one driver is available
+    _has_sql_driver = False
+    try:
+        import sqlalchemy  # noqa: F401
+        _has_sql_driver = True
+    except ImportError:
+        pass
+    try:
+        import pymongo  # noqa: F401
+        _has_sql_driver = True
+    except ImportError:
+        pass
+    if _has_sql_driver:
+        caps.append("sql")
+    # http - always available (uses urllib from stdlib)
+    caps.append("http")
     return caps
 
 
@@ -80,6 +96,8 @@ def _execute_sql(executor: dict, timeout, merged_env, workdir,
     query = executor.get("query", "")
     connection_uri = executor.get("connection_uri") or ""
     database = executor.get("database") or ""
+    max_rows = executor.get("max_rows", 10000)
+    autocommit = executor.get("autocommit", True)
 
     if not query.strip():
         return 1, "", "sql executor requires a non-empty query"
@@ -109,10 +127,21 @@ def _execute_sql(executor: dict, timeout, merged_env, workdir,
             "    print('sqlalchemy is not installed on this worker', file=sys.stderr); sys.exit(1)\n"
             f"engine = create_engine({connection_uri!r})\n"
             "with engine.connect() as conn:\n"
-            f"    result = conn.execute(text({query!r}))\n"
-            "    rows = [dict(r._mapping) for r in result]\n"
-            "    print(json.dumps(rows, default=str))\n"
         )
+        if not autocommit:
+            driver_code += "    trans = conn.begin()\n"
+        driver_code += (
+            f"    result = conn.execute(text({query!r}))\n"
+            "    try:\n"
+            "        rows = [dict(r._mapping) for r in result]\n"
+            f"        truncated = len(rows) > {max_rows}\n"
+            f"        rows = rows[:{max_rows}]\n"
+            '        print(json.dumps({"rows": rows, "row_count": len(rows), "truncated": truncated}, default=str))\n'
+            "    except Exception:\n"
+            '        print(json.dumps({"rows": [], "row_count": 0, "truncated": False, "message": "query executed (no result set)"}, default=str))\n'
+        )
+        if not autocommit:
+            driver_code += "    trans.commit()\n"
 
     # Write to temp file and execute
     tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, prefix="hydra-sql-")
@@ -137,6 +166,51 @@ def _execute_sql(executor: dict, timeout, merged_env, workdir,
             pass
 
 
+def _execute_http(executor: dict, timeout, log_callback_out, log_callback_err):
+    """Execute an HTTP request and return the response."""
+    import urllib.request
+    import urllib.error
+
+    url = executor.get("url", "")
+    if not url:
+        return 1, "", "http executor requires a non-empty url"
+
+    method = executor.get("method", "GET").upper()
+    headers = executor.get("headers") or {}
+    body = executor.get("body")
+    expected_status = executor.get("expected_status", [200])
+    timeout_seconds = executor.get("timeout_seconds", 30)
+
+    body_bytes = body.encode("utf-8") if body else None
+    req = urllib.request.Request(url, data=body_bytes, headers=headers, method=method)
+
+    try:
+        resp = urllib.request.urlopen(req, timeout=timeout_seconds)
+        status = resp.status
+        resp_headers = dict(resp.getheaders())
+        resp_body = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        status = e.code
+        resp_headers = dict(e.headers.items()) if e.headers else {}
+        resp_body = e.read().decode("utf-8", errors="replace") if e.fp else ""
+    except Exception as e:
+        return 1, "", f"http request failed: {e}"
+
+    result = json.dumps({
+        "status": status,
+        "headers": resp_headers,
+        "body": resp_body,
+    }, default=str)
+
+    if log_callback_out:
+        log_callback_out(result)
+
+    if expected_status and status not in expected_status:
+        return 1, result, f"unexpected status {status}, expected one of {expected_status}"
+
+    return 0, result, ""
+
+
 def execute_job(
     job: dict,
     log_callback_out: Optional[Callable[[str], None]] = None,
@@ -152,10 +226,11 @@ def execute_job(
     kerberos = executor.get("kerberos") or {}
     exec_type = (executor.get("type") or job.get("shell") or "shell").lower()
     job_identifier = job.get("_id") or job.get("id") or "job"
-    is_linux = platform.system().lower().startswith("linux")
+    current_os = platform.system().lower()
+    supports_impersonation = current_os in ("linux", "darwin")
 
-    if (impersonate_user or kerberos) and not is_linux:
-        return 1, "", "impersonation/kerberos executor settings are supported only on Linux workers"
+    if (impersonate_user or kerberos) and not supports_impersonation:
+        return 1, "", f"impersonation/kerberos executor settings are supported only on Linux/macOS workers (current: {platform.system()})"
 
     effective_env = dict(env or {})
     if kerberos.get("ccache"):
@@ -187,27 +262,30 @@ def execute_job(
     source_cleanup = None
 
     if source and source.get("url"):
-        tmp_source_dir = tempfile.mkdtemp(prefix=f"hydra-source-{job_identifier}-")
-        try:
-            protocol = source.get("protocol") or "git"
+        domain = job.get("domain", "prod")
+
+        def _fetch_source(dest_dir: str, src_cfg: dict):
+            protocol = src_cfg.get("protocol") or "git"
             if protocol == "copy":
-                fetch_copy_source(source["url"], tmp_source_dir)
+                fetch_copy_source(src_cfg["url"], dest_dir)
             elif protocol == "rsync":
-                fetch_rsync_source(source["url"], tmp_source_dir, credential_ref_token=source.get("token") or "")
+                fetch_rsync_source(src_cfg["url"], dest_dir, credential_ref_token=src_cfg.get("token") or "")
             else:
-                sparse_path = source.get("path", "") if source.get("sparse") else ""
-                fetch_git_source(source["url"], source.get("ref", "main"), tmp_source_dir, token=source.get("token") or "", sparse_path=sparse_path)
+                sparse_path = src_cfg.get("path", "") if src_cfg.get("sparse") else ""
+                fetch_git_source(src_cfg["url"], src_cfg.get("ref", "main"), dest_dir, token=src_cfg.get("token") or "", sparse_path=sparse_path)
+
+        try:
+            cache = get_workspace_cache()
+            source_dir, release_fn = cache.get_or_create(
+                domain=domain,
+                job_id=job_identifier,
+                source_config=source,
+                fetch_fn=_fetch_source,
+            )
             # Determine effective workdir
-            # 1. Start at repo root
-            base_path = tmp_source_dir
-            # 2. If source has a 'path' sub-directory, append it
+            base_path = source_dir
             if source.get("path"):
                 base_path = os.path.join(base_path, source["path"])
-            
-            # 3. If executor has a workdir:
-            #    - if absolute, treat as relative to the fetched source root
-            #      (strip leading separator so the cloned code is accessible)
-            #    - if relative, append to base_path
             if workdir:
                 if os.path.isabs(workdir):
                     workdir = os.path.join(base_path, workdir.lstrip("/\\"))
@@ -215,13 +293,9 @@ def execute_job(
                     workdir = os.path.join(base_path, workdir)
             else:
                 workdir = base_path
-            
-            def _cleanup_source():
-                shutil.rmtree(tmp_source_dir, ignore_errors=True)
-            source_cleanup = _cleanup_source
+            source_cleanup = release_fn
 
         except Exception as e:
-            shutil.rmtree(tmp_source_dir, ignore_errors=True)
             return 1, "", f"Failed to fetch source: {str(e)}"
 
     try:
@@ -287,6 +361,10 @@ def execute_job(
             return _execute_sql(
                 executor, timeout, merged_env, workdir,
                 _run_cmd, log_callback_out, log_callback_err,
+            )
+        if exec_type == "http":
+            return _execute_http(
+                executor, timeout, log_callback_out, log_callback_err,
             )
 
         # default shell executor

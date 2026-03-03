@@ -38,6 +38,7 @@ def _resolve_credential_refs(job: dict, db) -> dict:
     """If the job's executor or source uses credential_ref, resolve it.
 
     For SQL executors: resolves credential_ref to connection_uri.
+    For HTTP executors: resolves credential_ref to Authorization header.
     For git sources: resolves credential_ref to a token injected into the source.
 
     This injects decrypted credentials into the job dict so the worker
@@ -84,6 +85,30 @@ def _resolve_credential_refs(job: dict, db) -> dict:
                         job = {**job, "executor": {**executor, "connection_uri": resolved_uri}}
                 except Exception:
                     log.exception("Failed to decrypt credential '%s' for job %s", credential_ref, job.get("_id"))
+
+    # Resolve HTTP executor credential_ref → inject Authorization header
+    if executor.get("type") == "http":
+        credential_ref = (executor.get("credential_ref") or "").strip()
+        if credential_ref:
+            cred_doc = db.credentials.find_one({"name": credential_ref, "domain": job_domain})
+            if not cred_doc:
+                log.warning("credential_ref '%s' not found for http job %s in domain %s", credential_ref, job.get("_id"), job_domain)
+            else:
+                try:
+                    decrypted = decrypt_payload(cred_doc["encrypted_payload"])
+                    # Support token (Bearer), api_key (X-API-Key), or username:password (Basic)
+                    headers = dict(executor.get("headers") or {})
+                    if decrypted.get("token"):
+                        headers["Authorization"] = f"Bearer {decrypted['token']}"
+                    elif decrypted.get("api_key"):
+                        headers["X-API-Key"] = decrypted["api_key"]
+                    elif decrypted.get("username") and decrypted.get("password"):
+                        import base64
+                        creds = base64.b64encode(f"{decrypted['username']}:{decrypted['password']}".encode()).decode()
+                        headers["Authorization"] = f"Basic {creds}"
+                    job = {**job, "executor": {**executor, "headers": headers}}
+                except Exception:
+                    log.exception("Failed to decrypt credential '%s' for http job %s", credential_ref, job.get("_id"))
 
     # Resolve source credential_ref (git PAT)
     source = job.get("source") or {}

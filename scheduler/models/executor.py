@@ -57,6 +57,19 @@ class SqlExecutor(ExecutorBase):
     credential_ref: Optional[str] = None
     query: str
     database: Optional[str] = None
+    max_rows: int = Field(default=10000, ge=1, le=100000)
+    autocommit: bool = True
+
+
+class HttpExecutor(ExecutorBase):
+    type: Literal["http"] = "http"
+    method: Literal["GET", "POST", "PUT", "DELETE", "PATCH"] = "GET"
+    url: str
+    headers: Dict[str, str] = Field(default_factory=dict)
+    body: Optional[str] = None
+    expected_status: List[int] = Field(default=[200])
+    timeout_seconds: int = 30
+    credential_ref: Optional[str] = None
 
 
 class ExternalExecutor(ExecutorBase):
@@ -70,6 +83,7 @@ ExecutorUnion = Union[
     BatchExecutor,
     PowerShellExecutor,
     SqlExecutor,
+    HttpExecutor,
     ExternalExecutor,
 ]
 ExecutorConfig = Annotated[ExecutorUnion, Field(discriminator="type")]
