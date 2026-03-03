@@ -163,7 +163,7 @@ func Execute(ctx context.Context, env *JobEnvelope, onStdout, onStderr func(stri
 		if jobID == "" {
 			jobID = env.Job.ID
 		}
-		tmpDir, err := os.MkdirTemp("", fmt.Sprintf("hydra-source-%s-", jobID))
+		tmpDir, err := os.MkdirTemp(strings.TrimSpace(os.Getenv("HYDRA_TEMP_DIR")), fmt.Sprintf("hydra-source-%s-", jobID))
 		if err != nil {
 			return &ExecResult{ReturnCode: 1, Stderr: fmt.Sprintf("failed to create source temp dir: %v", err)}
 		}
@@ -248,7 +248,11 @@ func execShell(ctx context.Context, spec *ExecutorSpec, args []string, env map[s
 
 	var cmd []string
 	if shell == "bash" {
-		cmd = append([]string{"/bin/bash", "-l", tmp}, args...)
+		bashPath := strings.TrimSpace(os.Getenv("HYDRA_SHELL_PATH"))
+		if bashPath == "" {
+			bashPath = "/bin/bash"
+		}
+		cmd = append([]string{bashPath, "-l", tmp}, args...)
 	} else {
 		cmd = append([]string{shell, tmp}, args...)
 	}
@@ -686,6 +690,10 @@ func DetectCapabilities() []string {
 // DetectShells returns the list of shell interpreters available on this system.
 func DetectShells() []string {
 	isWindows := runtime.GOOS == "windows"
+	bashPath := strings.TrimSpace(os.Getenv("HYDRA_SHELL_PATH"))
+	if bashPath == "" {
+		bashPath = "/bin/bash"
+	}
 	type probe struct {
 		name string
 		cmd  []string
@@ -701,7 +709,7 @@ func DetectShells() []string {
 		}
 	} else {
 		candidates = []probe{
-			{"bash", []string{"/bin/bash", "--version"}},
+			{"bash", []string{bashPath, "--version"}},
 			{"sh", []string{"/bin/sh", "--version"}},
 			{"pwsh", []string{"pwsh", "-Command", "echo ok"}},
 		}
@@ -758,8 +766,10 @@ func mergeOSEnv(extra map[string]string) []string {
 
 // writeTempFile creates a temporary file with the given prefix, suffix, and
 // content, returning its path. The caller is responsible for removal.
+// Honours HYDRA_TEMP_DIR for non-containerized environments.
 func writeTempFile(prefix, suffix, content string) (string, error) {
-	f, err := os.CreateTemp("", prefix+"*"+suffix)
+	tmpDir := strings.TrimSpace(os.Getenv("HYDRA_TEMP_DIR"))
+	f, err := os.CreateTemp(tmpDir, prefix+"*"+suffix)
 	if err != nil {
 		return "", err
 	}
@@ -781,7 +791,13 @@ func writeTempFile(prefix, suffix, content string) (string, error) {
 }
 
 // findPython returns the first available Python interpreter or "".
+// Honours HYDRA_PYTHON_PATH for non-containerized environments.
 func findPython() string {
+	if configured := strings.TrimSpace(os.Getenv("HYDRA_PYTHON_PATH")); configured != "" {
+		if probeCmd([]string{configured, "--version"}) {
+			return configured
+		}
+	}
 	for _, interp := range []string{"python3", "python"} {
 		if probeCmd([]string{interp, "--version"}) {
 			return interp

@@ -13,12 +13,74 @@ from .utils.rsync import fetch_rsync_source
 from .utils.workspace_cache import get_workspace_cache
 
 
+def _get_python_path() -> str:
+    """Return the configured Python interpreter path, or empty string for default probing.
+
+    When running outside a container the system Python may not be on the
+    default PATH or may be installed under a non-standard prefix.  Set
+    ``HYDRA_PYTHON_PATH`` to the full path of the desired interpreter
+    (e.g. ``/opt/python3.11/bin/python3``).
+    """
+    return os.environ.get("HYDRA_PYTHON_PATH", "").strip()
+
+
+def _get_shell_path() -> str:
+    """Return the configured default shell path.
+
+    Defaults to ``/bin/bash`` on Linux/macOS inside containers.  Set
+    ``HYDRA_SHELL_PATH`` when the host system keeps bash elsewhere
+    (e.g. ``/usr/local/bin/bash`` on macOS with Homebrew).
+    """
+    return os.environ.get("HYDRA_SHELL_PATH", "").strip()
+
+
+def _get_git_path() -> str:
+    """Return the configured git binary path.
+
+    Set ``HYDRA_GIT_PATH`` when git is not on the default PATH
+    (e.g. ``/usr/local/bin/git``).
+    """
+    return os.environ.get("HYDRA_GIT_PATH", "").strip()
+
+
+def _get_temp_dir() -> Optional[str]:
+    """Return a custom temporary directory for executor scratch files.
+
+    Set ``HYDRA_TEMP_DIR`` to a writable directory when the default OS
+    temp directory is unsuitable (e.g. small ``/tmp`` on a bare-metal host,
+    or a read-only tmpfs in a locked-down environment).  Returns None when
+    not set so that ``tempfile`` falls back to its default behaviour.
+    """
+    val = os.environ.get("HYDRA_TEMP_DIR", "").strip()
+    return val if val else None
+
+
+def _find_python() -> str:
+    """Locate a Python interpreter, honouring HYDRA_PYTHON_PATH."""
+    import subprocess
+    configured = _get_python_path()
+    if configured:
+        try:
+            subprocess.run([configured, "--version"], capture_output=True, timeout=5, check=True)
+            return configured
+        except Exception:
+            pass
+    for interp in ("python3", "python"):
+        try:
+            subprocess.run([interp, "--version"], capture_output=True, timeout=5)
+            return interp
+        except Exception:
+            pass
+    return ""
+
+
 def _detect_shells() -> list[str]:
     """Return list of shells available on this system."""
     found: list[str] = []
     is_win = platform.system().lower().startswith("win")
+    shell_path = _get_shell_path()
     candidates = {
-        "bash": ["/bin/bash", "--version"] if not is_win else ["bash", "--version"],
+        "bash": [shell_path or ("/bin/bash" if not is_win else "bash"), "--version"],
         "sh": ["/bin/sh", "--version"] if not is_win else [],
         "cmd": ["cmd", "/c", "echo ok"] if is_win else [],
         "powershell": ["powershell", "-Command", "echo ok"] if is_win else [],
@@ -39,16 +101,11 @@ def _detect_shells() -> list[str]:
 def _detect_capabilities() -> list[str]:
     """Return list of executor types this worker can handle."""
     caps = ["shell", "external"]
-    import subprocess
     # python
-    for interp in ("python3", "python"):
-        try:
-            subprocess.run([interp, "--version"], capture_output=True, timeout=5)
-            caps.append("python")
-            break
-        except Exception:
-            pass
+    if _find_python():
+        caps.append("python")
     # powershell/pwsh
+    import subprocess
     for ps in ("pwsh", "powershell"):
         try:
             subprocess.run([ps, "-Command", "echo ok"], capture_output=True, timeout=5)
@@ -158,21 +215,18 @@ def _execute_sql(executor: dict, timeout, merged_env, workdir,
             )
 
     # Write to temp file and execute
-    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, prefix="hydra-sql-")
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, prefix="hydra-sql-",
+                                     dir=_get_temp_dir())
     try:
         tmp.write(driver_code)
         tmp.close()
-        for interp in ("python3", "python"):
-            try:
-                import subprocess
-                subprocess.run([interp, "--version"], capture_output=True, timeout=5)
-                cmd = [interp, tmp.name]
-                if log_callback_out or log_callback_err:
-                    return _run_cmd(cmd)
-                return run_external(binary=cmd[0], args=cmd[1:], timeout=timeout, env=merged_env, workdir=workdir)
-            except Exception:
-                continue
-        return 1, "", "No Python interpreter found to run SQL driver script"
+        interp = _find_python()
+        if not interp:
+            return 1, "", "No Python interpreter found to run SQL driver script"
+        cmd = [interp, tmp.name]
+        if log_callback_out or log_callback_err:
+            return _run_cmd(cmd)
+        return run_external(binary=cmd[0], args=cmd[1:], timeout=timeout, env=merged_env, workdir=workdir)
     finally:
         try:
             os.unlink(tmp.name)
@@ -319,7 +373,8 @@ def execute_job(
                 command, cleanup = prepare_python_command(executor, job_identifier)
             except Exception as prep_err:
                 return 1, "", str(prep_err)
-            tmp_code = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, prefix="hydra-py-")
+            tmp_code = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, prefix="hydra-py-",
+                                                   dir=_get_temp_dir())
             try:
                 with tmp_code:
                     tmp_code.write(code)
@@ -352,7 +407,8 @@ def execute_job(
             script = executor.get("script") or job.get("command", "")
             shell = executor.get("shell", "cmd")
             suffix = ".bat" if shell == "cmd" else ".sh"
-            tmp_script = tempfile.NamedTemporaryFile(mode="w", suffix=suffix, delete=False, prefix="hydra-batch-")
+            tmp_script = tempfile.NamedTemporaryFile(mode="w", suffix=suffix, delete=False, prefix="hydra-batch-",
+                                                     dir=_get_temp_dir())
             try:
                 with tmp_script:
                     tmp_script.write(script)
@@ -384,11 +440,13 @@ def execute_job(
         # default shell executor
         script = executor.get("script") or job.get("command", "")
         shell = executor.get("shell", job.get("shell", "bash"))
-        tmp_script = tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False, prefix="hydra-sh-")
+        tmp_script = tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False, prefix="hydra-sh-",
+                                                 dir=_get_temp_dir())
         try:
             with tmp_script:
                 tmp_script.write(script)
-            cmd = _with_impersonation(["/bin/bash", "-l", tmp_script.name] if shell == "bash" else [shell, tmp_script.name])
+            bash_path = _get_shell_path() or "/bin/bash"
+            cmd = _with_impersonation([bash_path, "-l", tmp_script.name] if shell == "bash" else [shell, tmp_script.name])
             if log_callback_out or log_callback_err:
                 return _run_cmd(cmd)
             return run_external(binary=cmd[0], args=cmd[1:], timeout=timeout, env=merged_env, workdir=workdir)

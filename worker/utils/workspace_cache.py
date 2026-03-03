@@ -140,22 +140,23 @@ class WorkspaceCache:
     def _git_update(self, cache_path: str, source_config: dict) -> None:
         """Fast-update a cached git workspace."""
         import subprocess
+        git = os.environ.get("HYDRA_GIT_PATH", "").strip() or "git"
         ref = source_config.get("ref", "main")
         try:
             subprocess.run(
-                ["git", "fetch", "-q", "origin"],
+                [git, "fetch", "-q", "origin"],
                 cwd=cache_path,
                 capture_output=True,
                 timeout=120,
             )
             subprocess.run(
-                ["git", "checkout", ref],
+                [git, "checkout", ref],
                 cwd=cache_path,
                 capture_output=True,
                 timeout=60,
             )
             subprocess.run(
-                ["git", "pull", "-q", "--ff-only"],
+                [git, "pull", "-q", "--ff-only"],
                 cwd=cache_path,
                 capture_output=True,
                 timeout=120,

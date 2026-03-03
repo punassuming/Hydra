@@ -121,6 +121,22 @@ Source workspaces are cached per-worker to avoid repeated git clones and file co
 
 Per-job cache control via `source.cache`: `"auto"` (default), `"always"`, `"never"`.
 
+### Non-Containerized Execution
+
+When running workers outside Docker (bare-metal, VMs, or custom environments), the
+following environment variables let you override paths that are normally guaranteed
+by the container image:
+
+| Variable | Default | Description |
+|---|---|---|
+| `HYDRA_PYTHON_PATH` | `python3` (PATH lookup) | Full path to Python interpreter for `python`/`sql` executors |
+| `HYDRA_SHELL_PATH` | `/bin/bash` | Full path to bash for `shell` executor |
+| `HYDRA_GIT_PATH` | `git` (PATH lookup) | Full path to git binary for source provisioning |
+| `HYDRA_TEMP_DIR` | OS default (`/tmp`) | Scratch directory for executor temp files |
+
+These apply to both the Python and Go workers.  When unset, all paths fall back to
+the defaults used inside the Docker container image.
+
 ---
 
 ## Scheduling

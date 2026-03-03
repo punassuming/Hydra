@@ -73,7 +73,8 @@ func (c *Cache) GetOrCreate(domain, jobID string, src *SourceConfig, fetchFn fun
 	}
 
 	if cacheMode == "never" {
-		tmpDir, err := os.MkdirTemp("", fmt.Sprintf("hydra-source-%s-", jobID))
+		tmpBase := os.Getenv("HYDRA_TEMP_DIR")
+		tmpDir, err := os.MkdirTemp(tmpBase, fmt.Sprintf("hydra-source-%s-", jobID))
 		if err != nil {
 			return "", nil, fmt.Errorf("failed to create temp dir: %w", err)
 		}
@@ -159,17 +160,21 @@ func lastUsed(path string) float64 {
 }
 
 func (c *Cache) gitUpdate(cachePath, ref string) {
-	// Best-effort fast update.
+	// Best-effort fast update.  Honour HYDRA_GIT_PATH.
+	git := os.Getenv("HYDRA_GIT_PATH")
+	if git == "" {
+		git = "git"
+	}
 	run := func(args ...string) {
 		cmd := osexec.Command(args[0], args[1:]...)
 		cmd.Dir = cachePath
 		_ = cmd.Run()
 	}
-	run("git", "fetch", "-q", "origin")
+	run(git, "fetch", "-q", "origin")
 	if ref != "" {
-		run("git", "checkout", ref)
+		run(git, "checkout", ref)
 	}
-	run("git", "pull", "-q", "--ff-only")
+	run(git, "pull", "-q", "--ff-only")
 }
 
 func dirSizeMB(path string) float64 {
