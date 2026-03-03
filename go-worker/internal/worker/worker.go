@@ -75,19 +75,25 @@ func pollLoop(ctx context.Context, cfg *config.Config, rdb *redis.Client, queueK
 		if len(result) < 2 {
 			continue
 		}
-		go handleJob(cfg, result[1])
+		go handleJob(ctx, cfg, result[1])
 	}
 }
 
 // handleJob decodes and dispatches a single job payload.
-func handleJob(cfg *config.Config, payload string) {
+func handleJob(ctx context.Context, cfg *config.Config, payload string) {
 	var env executor.JobEnvelope
 	if err := json.Unmarshal([]byte(payload), &env); err != nil {
 		log.Printf("[worker] failed to decode job payload: %v", err)
 		return
 	}
 	log.Printf("[worker] received job %s (run %s)", env.JobID, env.RunID)
-	if err := executor.Execute(&env); err != nil {
-		log.Printf("[worker] job %s failed: %v", env.JobID, err)
+	result := executor.Execute(ctx, &env,
+		func(line string) { log.Printf("[job:%s:stdout] %s", env.RunID, line) },
+		func(line string) { log.Printf("[job:%s:stderr] %s", env.RunID, line) },
+	)
+	if result.ReturnCode != 0 {
+		log.Printf("[worker] job %s finished with exit code %d", env.JobID, result.ReturnCode)
+	} else {
+		log.Printf("[worker] job %s completed successfully", env.JobID)
 	}
 }
