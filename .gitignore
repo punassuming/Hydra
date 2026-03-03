@@ -10,3 +10,7 @@ ui/cypress/videos/
 ui/src/*.js
 ui/src/*.js.map
 .resume
+
+# C# build artifacts
+HydraWorker/bin/
+HydraWorker/obj/
