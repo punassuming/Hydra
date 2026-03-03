@@ -38,6 +38,12 @@ def executor_types_match(job_exec_types: List[str], worker_capabilities: List[st
 
 def passes_affinity(job: Dict, worker: Dict) -> bool:
     affinity = job.get("affinity", {})
+    executor = job.get("executor", {})
+    # If job requires impersonation, only allow Linux/macOS workers
+    if executor.get("impersonate_user"):
+        worker_os = worker.get("os", "").lower()
+        if worker_os not in ("linux", "darwin"):
+            return False
     return (
         os_matches(affinity.get("os", []), worker.get("os", ""))
         and tags_match(affinity.get("tags", []), worker.get("tags", []))

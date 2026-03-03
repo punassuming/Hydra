@@ -57,6 +57,7 @@ class SourceConfig(BaseModel):
     path: Optional[str] = None
     sparse: bool = False  # git only; use sparse-checkout to fetch only 'path' subtree
     credential_ref: Optional[str] = None
+    cache: Literal["auto", "always", "never"] = "auto"
 
 
 class JobDefinition(BaseModel):

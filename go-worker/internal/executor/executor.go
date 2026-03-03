@@ -1,13 +1,16 @@
 // Package executor implements the job execution engine for the Go worker,
-// supporting shell, external, batch, python, and powershell executor types.
+// supporting shell, external, batch, python, powershell, sql, and http executor types.
 package executor
 
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,6 +64,23 @@ type ExecutorSpec struct {
 	Command     string            `json:"command,omitempty"`
 	Code        string            `json:"code,omitempty"`
 	Interpreter string            `json:"interpreter,omitempty"`
+	// SQL executor fields
+	Dialect       string `json:"dialect,omitempty"`
+	ConnectionURI string `json:"connection_uri,omitempty"`
+	Query         string `json:"query,omitempty"`
+	Database      string `json:"database,omitempty"`
+	MaxRows       int    `json:"max_rows,omitempty"`
+	Autocommit    *bool  `json:"autocommit,omitempty"`
+	// HTTP executor fields
+	Method         string            `json:"method,omitempty"`
+	URL            string            `json:"url,omitempty"`
+	Headers        map[string]string `json:"headers,omitempty"`
+	Body           string            `json:"body,omitempty"`
+	ExpectedStatus []int             `json:"expected_status,omitempty"`
+	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
+	// Impersonation / Kerberos
+	ImpersonateUser string            `json:"impersonate_user,omitempty"`
+	Kerberos        map[string]string `json:"kerberos,omitempty"`
 }
 
 // JobDef is the full job definition nested inside the envelope.
@@ -112,6 +132,24 @@ func Execute(ctx context.Context, env *JobEnvelope, onStdout, onStderr func(stri
 	workdir := spec.Workdir
 	args := spec.Args
 
+	// Impersonation / Kerberos
+	impersonateUser := strings.TrimSpace(spec.ImpersonateUser)
+	kerberos := spec.Kerberos
+
+	if (impersonateUser != "" || len(kerberos) > 0) && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		return &ExecResult{ReturnCode: 1, Stderr: fmt.Sprintf("impersonation/kerberos not supported on %s", runtime.GOOS)}
+	}
+
+	// Kerberos bootstrap
+	if len(kerberos) > 0 && kerberos["principal"] != "" && kerberos["keytab"] != "" {
+		if cc := kerberos["ccache"]; cc != "" {
+			mergedEnv["KRB5CCNAME"] = cc
+		}
+		if err := kerberosInit(ctx, kerberos, impersonateUser, mergedEnv); err != nil {
+			return &ExecResult{ReturnCode: 1, Stderr: err.Error()}
+		}
+	}
+
 	// Apply job-level timeout via context.
 	if env.Job.Timeout > 0 {
 		var cancel context.CancelFunc
@@ -125,7 +163,7 @@ func Execute(ctx context.Context, env *JobEnvelope, onStdout, onStderr func(stri
 		if jobID == "" {
 			jobID = env.Job.ID
 		}
-		tmpDir, err := os.MkdirTemp("", fmt.Sprintf("hydra-source-%s-", jobID))
+		tmpDir, err := os.MkdirTemp(tempDir(), fmt.Sprintf("hydra-source-%s-", jobID))
 		if err != nil {
 			return &ExecResult{ReturnCode: 1, Stderr: fmt.Sprintf("failed to create source temp dir: %v", err)}
 		}
@@ -157,9 +195,6 @@ func Execute(ctx context.Context, env *JobEnvelope, onStdout, onStderr func(stri
 			basePath = filepath.Join(basePath, src.Path)
 		}
 		if workdir != "" {
-			// Matches Python worker: absolute workdir is treated as relative to
-			// the fetched source root (strip leading separator so the cloned code
-			// is accessible); relative workdir is appended to basePath.
 			if filepath.IsAbs(workdir) {
 				workdir = filepath.Join(basePath, strings.TrimLeft(workdir, "/\\"))
 			} else {
@@ -172,15 +207,19 @@ func Execute(ctx context.Context, env *JobEnvelope, onStdout, onStderr func(stri
 
 	switch execType {
 	case "shell":
-		return execShell(ctx, spec, args, mergedEnv, workdir, onStdout, onStderr)
+		return execShell(ctx, spec, args, mergedEnv, workdir, impersonateUser, onStdout, onStderr)
 	case "external":
-		return execExternal(ctx, spec, args, mergedEnv, workdir, onStdout, onStderr)
+		return execExternal(ctx, spec, args, mergedEnv, workdir, impersonateUser, onStdout, onStderr)
 	case "batch":
 		return execBatch(ctx, spec, args, mergedEnv, workdir, onStdout, onStderr)
 	case "python":
-		return execPython(ctx, spec, args, mergedEnv, workdir, onStdout, onStderr)
+		return execPython(ctx, spec, args, mergedEnv, workdir, impersonateUser, onStdout, onStderr)
 	case "powershell":
-		return execPowershell(ctx, spec, args, mergedEnv, workdir, onStdout, onStderr)
+		return execPowershell(ctx, spec, args, mergedEnv, workdir, impersonateUser, onStdout, onStderr)
+	case "sql":
+		return execSQL(ctx, spec, mergedEnv, onStdout, onStderr)
+	case "http":
+		return execHTTP(ctx, spec, onStdout, onStderr)
 	default:
 		return &ExecResult{ReturnCode: 1, Stderr: fmt.Sprintf("unsupported executor type: %s", execType)}
 	}
@@ -190,7 +229,7 @@ func Execute(ctx context.Context, env *JobEnvelope, onStdout, onStderr func(stri
 // Executor type handlers
 // ---------------------------------------------------------------------------
 
-func execShell(ctx context.Context, spec *ExecutorSpec, args []string, env map[string]string, workdir string, onStdout, onStderr func(string)) *ExecResult {
+func execShell(ctx context.Context, spec *ExecutorSpec, args []string, env map[string]string, workdir, impersonateUser string, onStdout, onStderr func(string)) *ExecResult {
 	script := spec.Script
 	if script == "" {
 		return &ExecResult{ReturnCode: 1, Stderr: "shell executor requires a non-empty script"}
@@ -209,19 +248,31 @@ func execShell(ctx context.Context, spec *ExecutorSpec, args []string, env map[s
 
 	var cmd []string
 	if shell == "bash" {
-		cmd = append([]string{"/bin/bash", "-l", tmp}, args...)
+		bashPath := strings.TrimSpace(os.Getenv("HYDRA_SHELL_PATH"))
+		if bashPath == "" {
+			bashPath = "/bin/bash"
+		}
+		cmd = append([]string{bashPath, "-l", tmp}, args...)
 	} else {
 		cmd = append([]string{shell, tmp}, args...)
+	}
+	cmd, impErr := withImpersonation(cmd, impersonateUser)
+	if impErr != nil {
+		return &ExecResult{ReturnCode: 1, Stderr: impErr.Error()}
 	}
 	return runCommand(ctx, cmd, env, workdir, onStdout, onStderr)
 }
 
-func execExternal(ctx context.Context, spec *ExecutorSpec, args []string, env map[string]string, workdir string, onStdout, onStderr func(string)) *ExecResult {
+func execExternal(ctx context.Context, spec *ExecutorSpec, args []string, env map[string]string, workdir, impersonateUser string, onStdout, onStderr func(string)) *ExecResult {
 	binary := spec.Command
 	if binary == "" {
 		return &ExecResult{ReturnCode: 1, Stderr: "external executor requires a non-empty command"}
 	}
 	cmd := append([]string{binary}, args...)
+	cmd, impErr := withImpersonation(cmd, impersonateUser)
+	if impErr != nil {
+		return &ExecResult{ReturnCode: 1, Stderr: impErr.Error()}
+	}
 	return runCommand(ctx, cmd, env, workdir, onStdout, onStderr)
 }
 
@@ -256,7 +307,7 @@ func execBatch(ctx context.Context, spec *ExecutorSpec, args []string, env map[s
 	return runCommand(ctx, cmd, env, workdir, onStdout, onStderr)
 }
 
-func execPython(ctx context.Context, spec *ExecutorSpec, args []string, env map[string]string, workdir string, onStdout, onStderr func(string)) *ExecResult {
+func execPython(ctx context.Context, spec *ExecutorSpec, args []string, env map[string]string, workdir, impersonateUser string, onStdout, onStderr func(string)) *ExecResult {
 	code := spec.Code
 	if code == "" {
 		return &ExecResult{ReturnCode: 1, Stderr: "python executor requires non-empty code"}
@@ -277,10 +328,14 @@ func execPython(ctx context.Context, spec *ExecutorSpec, args []string, env map[
 	defer os.Remove(tmp)
 
 	cmd := append([]string{interpreter, tmp}, args...)
+	cmd, impErr := withImpersonation(cmd, impersonateUser)
+	if impErr != nil {
+		return &ExecResult{ReturnCode: 1, Stderr: impErr.Error()}
+	}
 	return runCommand(ctx, cmd, env, workdir, onStdout, onStderr)
 }
 
-func execPowershell(ctx context.Context, spec *ExecutorSpec, args []string, env map[string]string, workdir string, onStdout, onStderr func(string)) *ExecResult {
+func execPowershell(ctx context.Context, spec *ExecutorSpec, args []string, env map[string]string, workdir, impersonateUser string, onStdout, onStderr func(string)) *ExecResult {
 	script := spec.Script
 	if script == "" {
 		return &ExecResult{ReturnCode: 1, Stderr: "powershell executor requires a non-empty script"}
@@ -292,7 +347,224 @@ func execPowershell(ctx context.Context, spec *ExecutorSpec, args []string, env 
 	}
 
 	cmd := append([]string{shell, "-NoProfile", "-Command", script}, args...)
+	cmd, impErr := withImpersonation(cmd, impersonateUser)
+	if impErr != nil {
+		return &ExecResult{ReturnCode: 1, Stderr: impErr.Error()}
+	}
 	return runCommand(ctx, cmd, env, workdir, onStdout, onStderr)
+}
+
+// execSQL executes a SQL query by generating and running a small Python driver
+// script (matching the Python worker strategy). The Go worker uses Python as
+// the SQL execution bridge to avoid compiling heavy native DB drivers.
+func execSQL(ctx context.Context, spec *ExecutorSpec, env map[string]string, onStdout, onStderr func(string)) *ExecResult {
+	connURI := spec.ConnectionURI
+	if connURI == "" {
+		return &ExecResult{ReturnCode: 1, Stderr: "sql executor requires connection_uri or credential_ref"}
+	}
+	query := spec.Query
+	if strings.TrimSpace(query) == "" {
+		return &ExecResult{ReturnCode: 1, Stderr: "sql executor requires a non-empty query"}
+	}
+
+	dialect := spec.Dialect
+	if dialect == "" {
+		dialect = "postgres"
+	}
+	maxRows := spec.MaxRows
+	if maxRows <= 0 {
+		maxRows = 10000
+	}
+	autocommit := true
+	if spec.Autocommit != nil {
+		autocommit = *spec.Autocommit
+	}
+
+	var driverCode string
+	if dialect == "mongodb" {
+		database := spec.Database
+		driverCode = fmt.Sprintf(
+			"import json, sys\n"+
+				"try:\n"+
+				"    from pymongo import MongoClient\n"+
+				"except ImportError:\n"+
+				"    print('pymongo is not installed on this worker', file=sys.stderr); sys.exit(1)\n"+
+				"client = MongoClient(%q)\n"+
+				"db = client[%q] if %q else client.get_default_database()\n"+
+				"result = db.command(%q)\n"+
+				"print(json.dumps(result, default=str))\n",
+			connURI, database, database, query,
+		)
+	} else {
+		var queryBlock string
+		if !autocommit {
+			queryBlock = fmt.Sprintf(
+				"    trans = conn.begin()\n"+
+					"    try:\n"+
+					"        result = conn.execute(text(%q))\n"+
+					"        try:\n"+
+					"            rows = [dict(r._mapping) for r in result]\n"+
+					"            truncated = len(rows) > %d\n"+
+					"            rows = rows[:%d]\n"+
+					"            print(json.dumps({\"rows\": rows, \"row_count\": len(rows), \"truncated\": truncated}, default=str))\n"+
+					"        except Exception:\n"+
+					"            print(json.dumps({\"rows\": [], \"row_count\": 0, \"truncated\": False, \"message\": \"query executed (no result set)\"}, default=str))\n"+
+					"        trans.commit()\n"+
+					"    except Exception as e:\n"+
+					"        trans.rollback()\n"+
+					"        raise\n",
+				query, maxRows, maxRows,
+			)
+		} else {
+			queryBlock = fmt.Sprintf(
+				"    result = conn.execute(text(%q))\n"+
+					"    try:\n"+
+					"        rows = [dict(r._mapping) for r in result]\n"+
+					"        truncated = len(rows) > %d\n"+
+					"        rows = rows[:%d]\n"+
+					"        print(json.dumps({\"rows\": rows, \"row_count\": len(rows), \"truncated\": truncated}, default=str))\n"+
+					"    except Exception:\n"+
+					"        print(json.dumps({\"rows\": [], \"row_count\": 0, \"truncated\": False, \"message\": \"query executed (no result set)\"}, default=str))\n",
+				query, maxRows, maxRows,
+			)
+		}
+		driverCode = fmt.Sprintf(
+			"import json, sys\n"+
+				"try:\n"+
+				"    from sqlalchemy import create_engine, text\n"+
+				"except ImportError:\n"+
+				"    print('sqlalchemy is not installed on this worker', file=sys.stderr); sys.exit(1)\n"+
+				"engine = create_engine(%q)\n"+
+				"with engine.connect() as conn:\n"+
+				"%s",
+			connURI, queryBlock,
+		)
+	}
+
+	interpreter := findPython()
+	if interpreter == "" {
+		return &ExecResult{ReturnCode: 1, Stderr: "no python interpreter found to run SQL driver script"}
+	}
+
+	tmp, err := writeTempFile("hydra-sql-", ".py", driverCode)
+	if err != nil {
+		return &ExecResult{ReturnCode: 1, Stderr: fmt.Sprintf("failed to write SQL driver script: %v", err)}
+	}
+	defer os.Remove(tmp)
+
+	return runCommand(ctx, []string{interpreter, tmp}, env, "", onStdout, onStderr)
+}
+
+// execHTTP performs an HTTP request and returns the response.
+func execHTTP(ctx context.Context, spec *ExecutorSpec, onStdout, onStderr func(string)) *ExecResult {
+	targetURL := spec.URL
+	if targetURL == "" {
+		return &ExecResult{ReturnCode: 1, Stderr: "http executor requires a non-empty url"}
+	}
+
+	method := strings.ToUpper(spec.Method)
+	if method == "" {
+		method = "GET"
+	}
+
+	timeoutSec := spec.TimeoutSeconds
+	if timeoutSec <= 0 {
+		timeoutSec = 30
+	}
+
+	var bodyReader io.Reader
+	if spec.Body != "" {
+		bodyReader = strings.NewReader(spec.Body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, targetURL, bodyReader)
+	if err != nil {
+		return &ExecResult{ReturnCode: 1, Stderr: fmt.Sprintf("failed to build request: %v", err)}
+	}
+	for k, v := range spec.Headers {
+		req.Header.Set(k, v)
+	}
+
+	client := &http.Client{Timeout: time.Duration(timeoutSec) * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return &ExecResult{ReturnCode: 1, Stderr: fmt.Sprintf("http request failed: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	respHeaders := make(map[string]string)
+	for k := range resp.Header {
+		respHeaders[k] = resp.Header.Get(k)
+	}
+
+	result := map[string]interface{}{
+		"status":  resp.StatusCode,
+		"headers": respHeaders,
+		"body":    string(respBody),
+	}
+	resultJSON, _ := json.Marshal(result)
+	resultStr := string(resultJSON)
+
+	if onStdout != nil {
+		onStdout(resultStr)
+	}
+
+	expectedStatus := spec.ExpectedStatus
+	if len(expectedStatus) == 0 {
+		expectedStatus = []int{200}
+	}
+	statusOK := false
+	for _, s := range expectedStatus {
+		if s == resp.StatusCode {
+			statusOK = true
+			break
+		}
+	}
+	if !statusOK {
+		return &ExecResult{ReturnCode: 1, Stdout: resultStr, Stderr: fmt.Sprintf("unexpected status %d", resp.StatusCode)}
+	}
+
+	return &ExecResult{ReturnCode: 0, Stdout: resultStr}
+}
+
+// ---------------------------------------------------------------------------
+// Impersonation / Kerberos
+// ---------------------------------------------------------------------------
+
+// withImpersonation wraps cmd with sudo if impersonateUser is set.
+func withImpersonation(cmd []string, user string) ([]string, error) {
+	if user == "" {
+		return cmd, nil
+	}
+	switch runtime.GOOS {
+	case "linux", "darwin":
+		return append([]string{"sudo", "-n", "-u", user, "--"}, cmd...), nil
+	default:
+		return nil, fmt.Errorf("impersonation not supported on %s; configure the worker service to run as the target user", runtime.GOOS)
+	}
+}
+
+// kerberosInit runs kinit to bootstrap Kerberos authentication.
+func kerberosInit(ctx context.Context, kerberos map[string]string, user string, env map[string]string) error {
+	principal := kerberos["principal"]
+	keytab := kerberos["keytab"]
+	if principal == "" || keytab == "" {
+		return nil
+	}
+	cmd := []string{"kinit", "-kt", keytab, principal}
+	if user != "" {
+		var err error
+		cmd, err = withImpersonation(cmd, user)
+		if err != nil {
+			return err
+		}
+	}
+	result := runCommand(ctx, cmd, env, "", nil, nil)
+	if result.ReturnCode != 0 {
+		return fmt.Errorf("kerberos init failed: %s", result.Stderr)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -401,6 +673,8 @@ func DetectCapabilities() []string {
 
 	if findPython() != "" {
 		caps = append(caps, "python")
+		// SQL executor uses Python as a bridge — only advertise if Python is available.
+		caps = append(caps, "sql")
 	}
 	if findPowershell() != "" {
 		caps = append(caps, "powershell")
@@ -408,12 +682,18 @@ func DetectCapabilities() []string {
 	if runtime.GOOS == "windows" {
 		caps = append(caps, "batch")
 	}
+	// HTTP executor uses Go's stdlib — always available.
+	caps = append(caps, "http")
 	return caps
 }
 
 // DetectShells returns the list of shell interpreters available on this system.
 func DetectShells() []string {
 	isWindows := runtime.GOOS == "windows"
+	bashPath := strings.TrimSpace(os.Getenv("HYDRA_SHELL_PATH"))
+	if bashPath == "" {
+		bashPath = "/bin/bash"
+	}
 	type probe struct {
 		name string
 		cmd  []string
@@ -429,7 +709,7 @@ func DetectShells() []string {
 		}
 	} else {
 		candidates = []probe{
-			{"bash", []string{"/bin/bash", "--version"}},
+			{"bash", []string{bashPath, "--version"}},
 			{"sh", []string{"/bin/sh", "--version"}},
 			{"pwsh", []string{"pwsh", "-Command", "echo ok"}},
 		}
@@ -484,10 +764,17 @@ func mergeOSEnv(extra map[string]string) []string {
 	return base
 }
 
+// tempDir returns the configured scratch directory for executor temp files.
+// Returns "" (OS default) when HYDRA_TEMP_DIR is not set.
+func tempDir() string {
+	return strings.TrimSpace(os.Getenv("HYDRA_TEMP_DIR"))
+}
+
 // writeTempFile creates a temporary file with the given prefix, suffix, and
 // content, returning its path. The caller is responsible for removal.
+// Honours HYDRA_TEMP_DIR for non-containerized environments.
 func writeTempFile(prefix, suffix, content string) (string, error) {
-	f, err := os.CreateTemp("", prefix+"*"+suffix)
+	f, err := os.CreateTemp(tempDir(), prefix+"*"+suffix)
 	if err != nil {
 		return "", err
 	}
@@ -509,7 +796,13 @@ func writeTempFile(prefix, suffix, content string) (string, error) {
 }
 
 // findPython returns the first available Python interpreter or "".
+// Honours HYDRA_PYTHON_PATH for non-containerized environments.
 func findPython() string {
+	if configured := strings.TrimSpace(os.Getenv("HYDRA_PYTHON_PATH")); configured != "" {
+		if probeCmd([]string{configured, "--version"}) {
+			return configured
+		}
+	}
 	for _, interp := range []string{"python3", "python"} {
 		if probeCmd([]string{interp, "--version"}) {
 			return interp

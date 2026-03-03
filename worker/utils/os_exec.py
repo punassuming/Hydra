@@ -98,15 +98,14 @@ def run_command(command: str, shell: str = "bash", timeout: Optional[int] = None
                 env: Optional[Dict[str, str]] = None, workdir: Optional[str] = None) -> Tuple[int, str, str]:
     system = platform.system().lower()
     shell_lc = (shell or "bash").lower()
+    # Honour HYDRA_SHELL_PATH for non-containerized environments where
+    # bash may not live at /bin/bash (e.g. macOS Homebrew, NixOS, etc.).
+    bash_path = os.environ.get("HYDRA_SHELL_PATH", "").strip() or "/bin/bash"
     if system.startswith("linux") or system == "darwin":
-        if shell_lc == "bash":
-            cmd = ["/bin/bash", "-lc", command]
-        elif shell_lc == "cmd":
-            cmd = ["/bin/bash", "-lc", command]
-        elif shell_lc == "powershell":
-            cmd = ["/bin/bash", "-lc", command]
+        if shell_lc in ("bash", "cmd", "powershell"):
+            cmd = [bash_path, "-lc", command]
         else:
-            cmd = ["/bin/bash", "-lc", command]
+            cmd = [bash_path, "-lc", command]
     elif system.startswith("win"):
         if shell_lc == "powershell":
             cmd = ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command]
@@ -115,7 +114,7 @@ def run_command(command: str, shell: str = "bash", timeout: Optional[int] = None
         else:
             cmd = ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command]
     else:
-        cmd = ["/bin/bash", "-lc", command]
+        cmd = [bash_path, "-lc", command]
 
     return _run(cmd, timeout, env, workdir)
 

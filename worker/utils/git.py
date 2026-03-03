@@ -4,6 +4,11 @@ import os
 from urllib.parse import urlparse, urlunparse
 
 
+def _git_bin() -> str:
+    """Return the git binary path, honouring ``HYDRA_GIT_PATH``."""
+    return os.environ.get("HYDRA_GIT_PATH", "").strip() or "git"
+
+
 def _inject_token_into_url(url: str, token: str) -> str:
     """Inject a personal access token into an HTTPS git URL for authentication."""
     if not token:
@@ -43,32 +48,34 @@ def fetch_git_source(url: str, ref: str, dest: str, token: str = "", sparse_path
 
 def _full_clone(clone_url: str, ref: str, dest: str) -> None:
     """Standard shallow-then-full clone strategy."""
-    cmd_shallow = ["git", "clone", "-q", "--depth", "1", clone_url, dest]
+    git = _git_bin()
+    cmd_shallow = [git, "clone", "-q", "--depth", "1", clone_url, dest]
     result = subprocess.run(cmd_shallow, capture_output=True)
     if result.returncode != 0:
         shutil.rmtree(dest, ignore_errors=True)
         os.makedirs(dest, exist_ok=True)
-        cmd_clone = ["git", "clone", "-q", clone_url, dest]
+        cmd_clone = [git, "clone", "-q", clone_url, dest]
         subprocess.run(cmd_clone, check=True)
 
     if ref:
-        subprocess.run(["git", "checkout", ref], cwd=dest, check=True)
+        subprocess.run([git, "checkout", ref], cwd=dest, check=True)
 
 
 def _sparse_clone(clone_url: str, ref: str, dest: str, sparse_path: str) -> None:
     """Clone using sparse-checkout so only *sparse_path* is materialized."""
+    git = _git_bin()
     os.makedirs(dest, exist_ok=True)
-    subprocess.run(["git", "init", "-q", dest], check=True)
-    subprocess.run(["git", "remote", "add", "origin", clone_url], cwd=dest, check=True)
+    subprocess.run([git, "init", "-q", dest], check=True)
+    subprocess.run([git, "remote", "add", "origin", clone_url], cwd=dest, check=True)
     # Enable cone-mode sparse-checkout (fast, directory-level filtering)
     subprocess.run(
-        ["git", "sparse-checkout", "set", "--cone", sparse_path],
+        [git, "sparse-checkout", "set", "--cone", sparse_path],
         cwd=dest, check=True,
     )
     # Attempt shallow fetch first; fall back to full fetch
-    fetch_cmd = ["git", "fetch", "-q", "--depth", "1", "origin", ref or "HEAD"]
+    fetch_cmd = [git, "fetch", "-q", "--depth", "1", "origin", ref or "HEAD"]
     result = subprocess.run(fetch_cmd, cwd=dest, capture_output=True)
     if result.returncode != 0:
-        fetch_cmd_full = ["git", "fetch", "-q", "origin", ref or "HEAD"]
+        fetch_cmd_full = [git, "fetch", "-q", "origin", ref or "HEAD"]
         subprocess.run(fetch_cmd_full, cwd=dest, check=True)
-    subprocess.run(["git", "checkout", ref or "FETCH_HEAD"], cwd=dest, check=True)
+    subprocess.run([git, "checkout", ref or "FETCH_HEAD"], cwd=dest, check=True)

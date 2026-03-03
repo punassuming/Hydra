@@ -12,6 +12,14 @@ import (
 	"strings"
 )
 
+// gitBin returns the git binary path, honouring HYDRA_GIT_PATH.
+func gitBin() string {
+	if p := strings.TrimSpace(os.Getenv("HYDRA_GIT_PATH")); p != "" {
+		return p
+	}
+	return "git"
+}
+
 // FetchGit clones a git repository to dest, checking out ref.
 // token is injected into HTTPS URLs for private repository auth.
 // When sparsePath is non-empty, a sparse-checkout is used.
@@ -27,19 +35,20 @@ func FetchGit(repoURL, ref, dest, token, sparsePath string) error {
 }
 
 func fullClone(cloneURL, ref, dest string) error {
+	git := gitBin()
 	// Try shallow clone first.
-	cmd := exec.Command("git", "clone", "-q", "--depth", "1", cloneURL, dest)
+	cmd := exec.Command(git, "clone", "-q", "--depth", "1", cloneURL, dest)
 	if err := cmd.Run(); err != nil {
 		// Fall back to full clone.
 		os.RemoveAll(dest)
 		os.MkdirAll(dest, 0755)
-		cmd = exec.Command("git", "clone", "-q", cloneURL, dest)
+		cmd = exec.Command(git, "clone", "-q", cloneURL, dest)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("git clone failed: %s", string(out))
 		}
 	}
 	if ref != "" {
-		cmd = exec.Command("git", "checkout", ref)
+		cmd = exec.Command(git, "checkout", ref)
 		cmd.Dir = dest
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("git checkout %s failed: %s", ref, string(out))
@@ -49,6 +58,7 @@ func fullClone(cloneURL, ref, dest string) error {
 }
 
 func sparseClone(cloneURL, ref, dest, sparsePath string) error {
+	git := gitBin()
 	os.MkdirAll(dest, 0755)
 	run := func(args ...string) error {
 		cmd := exec.Command(args[0], args[1:]...)
@@ -58,13 +68,13 @@ func sparseClone(cloneURL, ref, dest, sparsePath string) error {
 		}
 		return nil
 	}
-	if err := run("git", "init", "-q", dest); err != nil {
+	if err := run(git, "init", "-q", dest); err != nil {
 		return err
 	}
-	if err := run("git", "remote", "add", "origin", cloneURL); err != nil {
+	if err := run(git, "remote", "add", "origin", cloneURL); err != nil {
 		return err
 	}
-	if err := run("git", "sparse-checkout", "set", "--cone", sparsePath); err != nil {
+	if err := run(git, "sparse-checkout", "set", "--cone", sparsePath); err != nil {
 		return err
 	}
 	fetchRef := ref
@@ -72,10 +82,10 @@ func sparseClone(cloneURL, ref, dest, sparsePath string) error {
 		fetchRef = "HEAD"
 	}
 	// Try shallow fetch first.
-	cmd := exec.Command("git", "fetch", "-q", "--depth", "1", "origin", fetchRef)
+	cmd := exec.Command(git, "fetch", "-q", "--depth", "1", "origin", fetchRef)
 	cmd.Dir = dest
 	if err := cmd.Run(); err != nil {
-		if err := run("git", "fetch", "-q", "origin", fetchRef); err != nil {
+		if err := run(git, "fetch", "-q", "origin", fetchRef); err != nil {
 			return err
 		}
 	}
@@ -83,7 +93,7 @@ func sparseClone(cloneURL, ref, dest, sparsePath string) error {
 	if checkoutRef == "" {
 		checkoutRef = "FETCH_HEAD"
 	}
-	return run("git", "checkout", checkoutRef)
+	return run(git, "checkout", checkoutRef)
 }
 
 func injectToken(rawURL, token string) string {

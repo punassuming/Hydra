@@ -225,3 +225,143 @@ func TestUnsupportedExecutorType(t *testing.T) {
 		t.Errorf("expected stderr to mention unsupported, got %q", result.Stderr)
 	}
 }
+
+func TestExecSQL_RequiresConnectionURI(t *testing.T) {
+	env := &JobEnvelope{
+		JobID: "test-sql-1",
+		RunID: "run-sql-1",
+		Job: JobDef{
+			Executor: ExecutorSpec{
+				Type:  "sql",
+				Query: "SELECT 1",
+			},
+		},
+	}
+	result := Execute(context.Background(), env, nil, nil)
+	if result.ReturnCode != 1 {
+		t.Errorf("expected rc=1 for missing connection_uri, got %d", result.ReturnCode)
+	}
+	if !strings.Contains(result.Stderr, "connection_uri") {
+		t.Errorf("expected stderr to mention connection_uri, got %q", result.Stderr)
+	}
+}
+
+func TestExecSQL_RequiresQuery(t *testing.T) {
+	env := &JobEnvelope{
+		JobID: "test-sql-2",
+		RunID: "run-sql-2",
+		Job: JobDef{
+			Executor: ExecutorSpec{
+				Type:          "sql",
+				ConnectionURI: "postgresql://localhost/test",
+				Query:         "",
+			},
+		},
+	}
+	result := Execute(context.Background(), env, nil, nil)
+	if result.ReturnCode != 1 {
+		t.Errorf("expected rc=1 for empty query, got %d", result.ReturnCode)
+	}
+	if !strings.Contains(result.Stderr, "non-empty query") {
+		t.Errorf("expected stderr to mention non-empty query, got %q", result.Stderr)
+	}
+}
+
+func TestExecHTTP_RequiresURL(t *testing.T) {
+	env := &JobEnvelope{
+		JobID: "test-http-1",
+		RunID: "run-http-1",
+		Job: JobDef{
+			Executor: ExecutorSpec{
+				Type: "http",
+				URL:  "",
+			},
+		},
+	}
+	result := Execute(context.Background(), env, nil, nil)
+	if result.ReturnCode != 1 {
+		t.Errorf("expected rc=1 for empty URL, got %d", result.ReturnCode)
+	}
+	if !strings.Contains(result.Stderr, "url") {
+		t.Errorf("expected stderr to mention url, got %q", result.Stderr)
+	}
+}
+
+func TestExecHTTP_ConnectionRefused(t *testing.T) {
+	env := &JobEnvelope{
+		JobID: "test-http-2",
+		RunID: "run-http-2",
+		Job: JobDef{
+			Executor: ExecutorSpec{
+				Type:           "http",
+				URL:            "http://127.0.0.1:1",
+				TimeoutSeconds: 2,
+			},
+		},
+	}
+	result := Execute(context.Background(), env, nil, nil)
+	if result.ReturnCode != 1 {
+		t.Errorf("expected rc=1 for connection refused, got %d", result.ReturnCode)
+	}
+}
+
+func TestWithImpersonation_Empty(t *testing.T) {
+	cmd := []string{"echo", "hello"}
+	result, err := withImpersonation(cmd, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 2 || result[0] != "echo" {
+		t.Errorf("expected unchanged cmd, got %v", result)
+	}
+}
+
+func TestWithImpersonation_Linux(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode")
+	}
+	cmd := []string{"echo", "hello"}
+	result, err := withImpersonation(cmd, "testuser")
+	if err != nil {
+		// On non-Linux/macOS this will error — that's fine
+		if strings.Contains(err.Error(), "not supported") {
+			t.Skip("impersonation not supported on this OS")
+		}
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result[0] != "sudo" || result[1] != "-n" || result[2] != "-u" || result[3] != "testuser" {
+		t.Errorf("expected sudo prefix, got %v", result)
+	}
+}
+
+func TestDetectCapabilities_IncludesHTTP(t *testing.T) {
+	caps := DetectCapabilities()
+	found := make(map[string]bool)
+	for _, c := range caps {
+		found[c] = true
+	}
+	if !found["http"] {
+		t.Error("capabilities should include 'http'")
+	}
+}
+
+func TestDetectCapabilities_SQLRequiresPython(t *testing.T) {
+	caps := DetectCapabilities()
+	hasPython := false
+	hasSQL := false
+	for _, c := range caps {
+		if c == "python" {
+			hasPython = true
+		}
+		if c == "sql" {
+			hasSQL = true
+		}
+	}
+	// SQL should only be advertised if Python is available
+	if hasPython && !hasSQL {
+		t.Error("if python is available, sql should also be advertised")
+	}
+	if !hasPython && hasSQL {
+		t.Error("sql should not be advertised without python")
+	}
+}

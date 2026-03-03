@@ -21,6 +21,11 @@ type Config struct {
 	DeploymentType       string
 	MetricsSampleSeconds float64
 	MetricsWindowSeconds int
+	// Non-containerized execution paths.  Empty means use PATH lookup.
+	PythonPath string // HYDRA_PYTHON_PATH — full path to python interpreter
+	ShellPath  string // HYDRA_SHELL_PATH — full path to bash/shell binary
+	GitPath    string // HYDRA_GIT_PATH   — full path to git binary
+	TempDir    string // HYDRA_TEMP_DIR   — scratch directory for executor temp files
 }
 
 // Load reads environment variables and returns a populated Config.
@@ -44,6 +49,10 @@ func Load() (*Config, error) {
 		DeploymentType:       deploymentType(),
 		MetricsSampleSeconds: metricsSampleSeconds(),
 		MetricsWindowSeconds: metricsWindowSeconds(),
+		PythonPath:           strings.TrimSpace(os.Getenv("HYDRA_PYTHON_PATH")),
+		ShellPath:            strings.TrimSpace(os.Getenv("HYDRA_SHELL_PATH")),
+		GitPath:              strings.TrimSpace(os.Getenv("HYDRA_GIT_PATH")),
+		TempDir:              strings.TrimSpace(os.Getenv("HYDRA_TEMP_DIR")),
 	}, nil
 }
 
