@@ -585,19 +585,10 @@ def test_os_exec_uses_hydra_shell_path(monkeypatch):
 
 
 def test_python_env_honours_hydra_python_path(monkeypatch):
-    """prepare_python_command should use HYDRA_PYTHON_PATH as default interpreter
-    when executor.interpreter is not specified.  Since system type creates a venv,
-    the base_python is derived from HYDRA_PYTHON_PATH."""
+    """Python executor should use HYDRA_PYTHON_PATH when executor.interpreter is not set."""
     import sys
     monkeypatch.setenv("HYDRA_PYTHON_PATH", sys.executable)
-    # Use "uv" type to see the interpreter directly (uv prepends it to the command)
-    # or verify via a non-venv path.  The simplest: the interpreter field should
-    # default to HYDRA_PYTHON_PATH.
-    from worker.utils.python_env import prepare_python_command as ppc
-    # When venv_path is explicitly provided, interpreter is just used directly.
-    cmd, cleanup = ppc({"environment": {"type": "system", "venv_path": "/some/venv"}}, "test-job")
-    # With a venv_path, it returns the venv python, but the interpreter (fallback)
-    # is what we set.  Let's test the raw interpreter resolution instead.
-    from worker.utils.python_env import _resolve_python_binary
-    result = _resolve_python_binary(None, sys.executable)
-    assert result == sys.executable
+    job = {"executor": {"type": "python", "code": "print('env-python-ok')"}, "timeout": 5}
+    rc, out, err = execute_job(job)
+    assert rc == 0, f"stderr: {err}"
+    assert "env-python-ok" in out

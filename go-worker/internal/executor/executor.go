@@ -163,7 +163,7 @@ func Execute(ctx context.Context, env *JobEnvelope, onStdout, onStderr func(stri
 		if jobID == "" {
 			jobID = env.Job.ID
 		}
-		tmpDir, err := os.MkdirTemp(strings.TrimSpace(os.Getenv("HYDRA_TEMP_DIR")), fmt.Sprintf("hydra-source-%s-", jobID))
+		tmpDir, err := os.MkdirTemp(tempDir(), fmt.Sprintf("hydra-source-%s-", jobID))
 		if err != nil {
 			return &ExecResult{ReturnCode: 1, Stderr: fmt.Sprintf("failed to create source temp dir: %v", err)}
 		}
@@ -764,12 +764,17 @@ func mergeOSEnv(extra map[string]string) []string {
 	return base
 }
 
+// tempDir returns the configured scratch directory for executor temp files.
+// Returns "" (OS default) when HYDRA_TEMP_DIR is not set.
+func tempDir() string {
+	return strings.TrimSpace(os.Getenv("HYDRA_TEMP_DIR"))
+}
+
 // writeTempFile creates a temporary file with the given prefix, suffix, and
 // content, returning its path. The caller is responsible for removal.
 // Honours HYDRA_TEMP_DIR for non-containerized environments.
 func writeTempFile(prefix, suffix, content string) (string, error) {
-	tmpDir := strings.TrimSpace(os.Getenv("HYDRA_TEMP_DIR"))
-	f, err := os.CreateTemp(tmpDir, prefix+"*"+suffix)
+	f, err := os.CreateTemp(tempDir(), prefix+"*"+suffix)
 	if err != nil {
 		return "", err
 	}

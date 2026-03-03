@@ -38,8 +38,10 @@ def prepare_python_command(executor: Dict, job_id: str) -> Tuple[List[str], Opti
     env_cfg = (executor.get("environment") or {})
     env_type = env_cfg.get("type", "system")
     python_version = env_cfg.get("python_version")
-    # Honour HYDRA_PYTHON_PATH when the executor doesn't specify an interpreter.
-    interpreter = executor.get("interpreter") or os.environ.get("HYDRA_PYTHON_PATH", "").strip() or "python3"
+    # Resolve interpreter: explicit executor setting > HYDRA_PYTHON_PATH > default
+    interpreter = executor.get("interpreter") or ""
+    if not interpreter:
+        interpreter = os.environ.get("HYDRA_PYTHON_PATH", "").strip() or "python3"
     requirements = env_cfg.get("requirements") or []
     requirements_file = env_cfg.get("requirements_file") or None
     venv_path = env_cfg.get("venv_path") or None

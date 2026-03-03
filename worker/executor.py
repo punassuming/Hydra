@@ -58,13 +58,14 @@ def _get_temp_dir() -> Optional[str]:
 def _find_python() -> str:
     """Locate a Python interpreter, honouring HYDRA_PYTHON_PATH."""
     import subprocess
+    import logging
     configured = _get_python_path()
     if configured:
         try:
             subprocess.run([configured, "--version"], capture_output=True, timeout=5, check=True)
             return configured
         except Exception:
-            pass
+            logging.warning("HYDRA_PYTHON_PATH=%s is not a valid interpreter; falling back to PATH lookup", configured)
     for interp in ("python3", "python"):
         try:
             subprocess.run([interp, "--version"], capture_output=True, timeout=5)
