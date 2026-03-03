@@ -142,6 +142,7 @@ func register(ctx context.Context, cfg *config.Config, rdb *redis.Client) error 
 func (w *workerState) heartbeatLoop(ctx context.Context) {
 	const interval = 2 * time.Second
 	sampleInterval := w.cfg.MetricsSampleSeconds
+	// Ensure sample interval is never less than the heartbeat interval.
 	if sampleInterval < interval.Seconds() {
 		sampleInterval = interval.Seconds()
 	}

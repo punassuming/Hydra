@@ -157,6 +157,9 @@ func Execute(ctx context.Context, env *JobEnvelope, onStdout, onStderr func(stri
 			basePath = filepath.Join(basePath, src.Path)
 		}
 		if workdir != "" {
+			// Matches Python worker: absolute workdir is treated as relative to
+			// the fetched source root (strip leading separator so the cloned code
+			// is accessible); relative workdir is appended to basePath.
 			if filepath.IsAbs(workdir) {
 				workdir = filepath.Join(basePath, strings.TrimLeft(workdir, "/\\"))
 			} else {
@@ -374,6 +377,7 @@ func runCommand(ctx context.Context, cmdArgs []string, env map[string]string, wo
 			stderrBuf.WriteString("process killed: timeout exceeded\n")
 		} else if ctx.Err() == context.Canceled {
 			rc = exitCodeCanceled
+			stderrBuf.WriteString("process killed: canceled\n")
 		} else {
 			rc = 1
 			stderrBuf.WriteString(fmt.Sprintf("exec error: %v\n", err))

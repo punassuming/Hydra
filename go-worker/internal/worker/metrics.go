@@ -83,7 +83,7 @@ func readVmRSS(path string) int {
 			break
 		}
 	}
-	return 0
+	return -1
 }
 
 func isNumeric(s string) bool {
