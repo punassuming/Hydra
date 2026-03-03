@@ -1,61 +1,177 @@
 # hydra-jobs
 
-Hydra Jobs is a distributed job runner with:
-- FastAPI scheduler
-- Python workers
-- Redis coordination plane
-- Mongo persistence plane
-- React/Ant UI
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.100%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)](https://react.dev/)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
+[![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)](https://redis.io/)
+[![MongoDB](https://img.shields.io/badge/MongoDB-6-47A248?logo=mongodb&logoColor=white)](https://www.mongodb.com/)
 
-## Current Architecture
+**Hydra Jobs** is a production-ready distributed job scheduler and runner built for flexibility, multi-tenancy, and scale. It ships a full stack: a FastAPI scheduler, cross-platform Python workers, and a React UI — all wired through Redis and MongoDB.
 
-- Scheduler owns orchestration and persistence:
-  - Dispatches jobs from `job_queue:<domain>:pending` to `job_queue:<domain>:<worker_id>`
-  - Handles schedule loops (immediate/cron/interval)
-  - Performs failover requeue on offline workers
-  - Consumes worker run events from Redis (`run_events:<domain>`) and writes `job_runs` in Mongo
-  - On terminal failures, can send alerts through webhooks and SMTP email (using domain credentials)
-- Worker is Redis-only at runtime:
-  - Registers metadata + token hash in Redis
-  - Heartbeats and publishes rolling metrics (memory/process/load)
-  - Executes jobs and emits run lifecycle events to Redis
-  - Streams logs via Redis pub/sub + history lists
-- Mongo stores durable data:
-  - `domains`, `job_definitions`, `job_runs`
+---
 
-## Security Model
+## ✨ Key Features
 
-- Non-admin API access requires both:
-  - `x-api-key` (domain token)
-  - `domain` query/header
-- Admin access uses `ADMIN_TOKEN`
-- Worker auth is always domain-scoped:
-  - `DOMAIN=<domain>`
-  - `API_TOKEN` matching that domain
-- Optional (recommended) Redis ACL hardening:
-  - Per-domain worker Redis ACL password (`REDIS_PASSWORD`), username derived from `DOMAIN`
-  - Key/channel permissions limited to that domain only
+| Category | Capabilities |
+|---|---|
+| **Executors** | `shell`, `python`, `batch`, `powershell`, `sql` (Postgres/MySQL/MSSQL/Oracle/MongoDB), `external` |
+| **Scheduling** | Immediate, cron (with timezone), interval — with optional `start_at`/`end_at` windows |
+| **Source Provisioning** | Git clone (PAT auth, sparse checkout), local `copy`, SSH `rsync` |
+| **AI Assistance** | Natural-language job generation + run failure analysis via Google Gemini or OpenAI |
+| **Multi-Domain** | Full tenant isolation with per-domain tokens and Redis ACL scoping |
+| **Affinity** | Route jobs by OS, tags, hostnames, subnets, deployment type, or executor capability |
+| **Reliability** | Retries with delay, timeout enforcement, failover requeue, dependency graph (`depends_on`) |
+| **Alerting** | On-failure webhooks and SMTP email alerts (domain-scoped credentials) |
+| **Security** | Domain-scoped tokens, encrypted credential store, per-domain Redis ACL, Linux user impersonation, Kerberos pre-auth |
+| **Observability** | Real-time SSE log streaming, Gantt/concurrency timeline, worker metrics trends, operational event history |
+| **Deployment** | Docker Compose, Kubernetes manifests, Redis Sentinel HA |
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Scheduler (FastAPI)                       │
+│  ┌─────────────┐  ┌──────────────┐  ┌───────────────────────┐  │
+│  │ Schedule    │  │  Dispatch /  │  │  Run Event Loop       │  │
+│  │ Trigger     │  │  Failover    │  │  (Redis → MongoDB)    │  │
+│  │ Loop        │  │  Loop        │  │                       │  │
+│  └─────────────┘  └──────────────┘  └───────────────────────┘  │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │ Redis pub/sub + queues
+         ┌──────────────────┼──────────────────┐
+         ▼                  ▼                  ▼
+   ┌───────────┐      ┌───────────┐      ┌───────────┐
+   │  Worker   │      │  Worker   │      │  Worker   │
+   │ (domain A)│      │ (domain A)│      │ (domain B)│
+   └───────────┘      └───────────┘      └───────────┘
+         │                  │
+         └──────────────────┘
+                  │ job_runs / job_definitions
+                  ▼
+           ┌───────────┐
+           │  MongoDB  │
+           └───────────┘
+```
+
+- **Scheduler** owns orchestration and persistence: dispatches, failover, schedule triggers, and persisting run events from Redis to MongoDB.
+- **Workers** are Redis-only at runtime: register metadata, heartbeat with rolling metrics (memory/CPU/load), execute jobs, stream logs, and emit lifecycle events.
+- **MongoDB** stores durable state: `domains`, `job_definitions`, `job_runs`, `credentials`.
+
+---
 
 ## Quick Start
 
-Prereqs: Docker + Docker Compose
+**Prerequisites:** Docker + Docker Compose
 
 ```bash
-ADMIN_TOKEN=<your_admin_token> docker compose up --build
+ADMIN_TOKEN=my_secret docker compose up --build
 ```
 
-Services:
-- UI: `http://localhost:5173`
-- Scheduler API: `http://localhost:8000`
-- Redis: `localhost:6379`
-- Mongo: `localhost:27017`
+| Service | Address |
+|---|---|
+| UI | http://localhost:5173 |
+| Scheduler API | http://localhost:8000 |
+| Redis | localhost:6379 |
+| MongoDB | localhost:27017 |
 
-## Start Workers (Recommended ACL Path)
+> Set `GEMINI_API_KEY` or `OPENAI_API_KEY` to enable AI features.
 
-1. Rotate/get domain token and worker Redis ACL creds from admin API (or Admin UI).
-2. Launch workers with domain + token + ACL credentials:
+---
+
+## Executors
+
+Jobs declare an `executor` block to choose how they run:
+
+```jsonc
+// Shell
+{ "type": "shell", "script": "echo hello", "shell": "bash" }
+
+// Python (with isolated venv)
+{ "type": "python", "code": "print('hi')", "environment": { "type": "venv", "requirements": ["requests"] } }
+
+// SQL
+{ "type": "sql", "dialect": "postgres", "credential_ref": "my-db", "query": "SELECT 1" }
+
+// PowerShell (Windows workers)
+{ "type": "powershell", "script": "Get-Date" }
+```
+
+All executor types support `env`, `args`, `workdir`, `impersonate_user` (Linux), and Kerberos pre-auth.
+
+---
+
+## Scheduling
+
+```jsonc
+// Run once immediately
+{ "mode": "immediate" }
+
+// Cron with timezone
+{ "mode": "cron", "cron": "0 9 * * 1-5", "timezone": "America/New_York" }
+
+// Every 30 minutes within a window
+{ "mode": "interval", "interval_seconds": 1800, "start_at": "2025-01-01T00:00:00Z", "end_at": "2025-12-31T23:59:59Z" }
+```
+
+---
+
+## Source Provisioning
+
+Pull code at runtime before execution — no pre-baked images required:
+
+```jsonc
+// Git clone (PAT via stored credential)
+{ "protocol": "git", "url": "https://github.com/org/repo.git", "ref": "main", "path": "scripts", "sparse": true, "credential_ref": "gh-pat" }
+
+// Local filesystem copy
+{ "protocol": "copy", "url": "/opt/jobs/my-script" }
+
+// SSH rsync from remote host
+{ "protocol": "rsync", "url": "deploy@build-server:/releases/latest" }
+```
+
+---
+
+## AI Features
+
+### Magic Job Generator
+In the UI **New Job** form, describe a job in plain English and get a complete JSON definition — choose between Gemini and OpenAI.
+
+### AI Log Assistant
+On any run's log view, pick an analysis mode:
+- **Failure Fix** — root-cause and remediation steps
+- **Summary** — plain-language run summary
+- **Error Extraction** — structured list of errors/warnings
+- **Retry Tuning** — recommended retry/timeout settings
+- **Custom Question** — ask anything about the logs
+
+### Duration Prediction
+`POST /ai/predict_duration` estimates expected runtime from historical run data (median, mean, p90).
+
+---
+
+## Multi-Domain & Security
+
+Hydra Jobs is built for multi-tenant deployments. Each domain is fully isolated:
+
+- **Domain token** (`x-api-key`) required for all non-admin API calls
+- **Admin token** (`ADMIN_TOKEN`) grants cross-domain access
+- **Redis ACL** per domain: workers are scoped to only their domain's keys and channels
+- **Encrypted credential store**: database URIs, PAT tokens, SMTP passwords — all stored encrypted in MongoDB, resolved at dispatch, never returned by the API
+- **Linux impersonation**: `executor.impersonate_user` runs jobs as a specific OS user
+- **Kerberos**: `executor.kerberos` bootstraps a Kerberos ticket before execution
+
+### Start Workers (Recommended ACL Path)
 
 ```bash
+# 1. Rotate domain token + worker Redis ACL credentials from Admin UI or:
+#    POST /admin/domains/{domain}/redis_acl/rotate
+
+# 2. Launch workers
 API_TOKEN=<domain_token> \
 DOMAIN=prod \
 WORKER_REQUIRE_REDIS_ACL=true \
@@ -64,135 +180,174 @@ REDIS_PASSWORD=<worker_redis_acl_password> \
 docker compose -f docker-compose.worker.yml up --build --scale worker=2
 ```
 
-Notes:
-- Worker no longer requires `MONGO_URL`/`MONGO_DB`.
-- Workers communicate through Redis; scheduler persists runs into Mongo.
+---
 
-## Sentinel Support
+## Affinity & Routing
 
-Scheduler and worker support Redis Sentinel:
-- `REDIS_SENTINELS=host1:26379,host2:26379`
-- `REDIS_SENTINEL_MASTER=mymaster`
-- optional sentinel auth:
-  - `REDIS_SENTINEL_USERNAME`
-  - `REDIS_SENTINEL_PASSWORD`
-- redis auth:
-  - `REDIS_PASSWORD`
+Target specific workers using the `affinity` block:
+
+```jsonc
+{
+  "affinity": {
+    "os": ["linux"],
+    "tags": ["gpu", "high-mem"],
+    "hostnames": ["worker-01"],
+    "executor_types": ["python"],
+    "deployment_types": ["docker"]
+  }
+}
+```
+
+---
+
+## Reliability
+
+- **Retries** with configurable delay: `max_retries`, `retry_delay_seconds`
+- **Timeout** enforcement per job
+- **Concurrency control**: `MAX_CONCURRENCY` per worker; `bypass_concurrency` for priority jobs
+- **Failover**: scheduler requeues jobs from offline workers automatically
+- **Dependency graph**: `depends_on` list; `GET /jobs/{job_id}/graph` returns full upstream/downstream graph
+- **Completion criteria**: match on exit codes, stdout/stderr contains/not-contains
+
+---
+
+## Alerts & Webhooks
+
+On terminal job failure:
+```jsonc
+{
+  "on_failure_webhooks": ["https://hooks.example.com/notify"],
+  "on_failure_email_to": ["ops@example.com"],
+  "on_failure_email_credential_ref": "smtp-creds"
+}
+```
+
+---
+
+## API Reference
+
+| Group | Endpoints |
+|---|---|
+| **Jobs** | `GET /jobs/` · `POST /jobs/` · `PUT /jobs/{id}` · `POST /jobs/{id}/run` · `POST /jobs/adhoc` · `POST /jobs/validate` · `GET /jobs/{id}/graph` |
+| **Runs & Logs** | `GET /jobs/{id}/runs` · `GET /runs/{id}` · `GET /runs/{id}/stream` (SSE) · `GET /history` |
+| **Workers** | `GET /workers/` · `GET /workers/{id}/metrics` · `GET /workers/{id}/timeline` · `GET /workers/{id}/operations` · `POST /workers/{id}/state` |
+| **AI** | `POST /ai/generate` · `POST /ai/analyze` · `POST /ai/predict_duration` |
+| **Domain Self-Service** | `GET /domain/settings` · `PUT /domain/settings` · `POST /domain/token/rotate` · `POST /domain/redis_acl/rotate` |
+| **Credentials** | `GET /credentials/` · `POST /credentials/` · `PUT /credentials/{name}` · `DELETE /credentials/{name}` |
+| **Admin** | `GET /admin/domains` · `POST /admin/domains` · `POST /admin/domains/{domain}/token` · `POST /admin/domains/{domain}/redis_acl/rotate` |
+
+---
+
+## High Availability: Redis Sentinel
+
+```bash
+REDIS_SENTINELS=host1:26379,host2:26379
+REDIS_SENTINEL_MASTER=mymaster
+# Optional
+REDIS_SENTINEL_USERNAME=...
+REDIS_SENTINEL_PASSWORD=...
+```
 
 If Sentinel vars are not set, `REDIS_URL` is used.
 
-## Domain ACL Scripts
+---
 
-- Bootstrap via scheduler admin API:
-  - `scripts/provision-redis-acl.sh`
-- Configure external Redis directly with `redis-cli`:
-  - `scripts/configure-external-redis-acl.sh`
-- Agentic worker bring-up (Docker/K8s/Bare):
-  - `scripts/start-domain-workers.sh <domain> [scale]`
-  - Set `WORKER_BACKEND=docker|k8s|bare|print`
-- Agentic domain diagnostics (API + optional Redis deep checks):
-  - `scripts/diagnose-domain-admin.sh <domain>`
-  - Set `REDIS_CHECK_MODE=auto|none|docker|k8s|cli`
+## Kubernetes
 
-These scripts keep worker auth aligned to `DOMAIN + API_TOKEN + REDIS_PASSWORD` and support domain-scoped ACL operations.
+Manifests are in `deploy/k8s/`:
+- `scheduler-deployment.yaml`
+- `worker-deployment.yaml`
+- `worker-job-template.yaml`
+- `hydra.yaml` (full stack)
 
-## Worker Status Semantics
+---
 
-Worker status is split into two dimensions:
-- `connectivity_status`: heartbeat-derived `online|offline`
-- `dispatch_status`: scheduler dispatch mode `online|draining|offline`
+## Operator Scripts
 
-`POST /workers/{id}/state` accepts:
-- `online`
-- `draining`
-- `offline`
-- `disabled` (legacy alias for `offline`)
+| Script | Purpose |
+|---|---|
+| `scripts/dev-up.sh` | Start full dev stack |
+| `scripts/provision-redis-acl.sh` | Provision domain worker ACL via scheduler API |
+| `scripts/configure-external-redis-acl.sh` | Configure ACL on an external Redis directly |
+| `scripts/start-domain-workers.sh <domain> [scale]` | Agentic worker bring-up (Docker/K8s/Bare) |
+| `scripts/diagnose-domain-admin.sh <domain>` | Agentic domain + Redis diagnostics |
+| `scripts/create-domain.sh` | Create a new domain via the API |
 
-## Worker Operations Timeline
+---
 
-`GET /workers/{id}/operations` returns operational events such as:
-- start/restart
-- state changes (online/draining/offline)
-- dispatches
-- run start/end/result
-- failover/offline events
+## Worker Status
 
-UI Worker Detail includes an operational timeline panel.
+| Dimension | Values |
+|---|---|
+| `connectivity_status` | `online` \| `offline` (heartbeat-derived) |
+| `dispatch_status` | `online` \| `draining` \| `offline` (operator-controlled) |
 
-## API Highlights
+`POST /workers/{id}/state` accepts `online`, `draining`, `offline` (`disabled` accepted as legacy alias).
 
-- Jobs:
-  - `GET /jobs/`
-  - `POST /jobs/`
-  - `PUT /jobs/{job_id}`
-  - `POST /jobs/{job_id}/run`
-  - `POST /jobs/validate`
-  - `POST /jobs/{job_id}/validate`
-  - `POST /jobs/adhoc`
-- Runs/Logs:
-  - `GET /jobs/{job_id}/runs`
-  - `GET /runs/{run_id}`
-  - `GET /runs/{run_id}/stream` (SSE)
-- Workers:
-  - `GET /workers/`
-  - `GET /workers/{id}/metrics`
-  - `GET /workers/{id}/timeline`
-  - `GET /workers/{id}/operations`
-  - `POST /workers/{id}/state`
-- Admin:
-  - `GET /admin/domains`
-  - `POST /admin/domains`
-  - `POST /admin/domains/{domain}/token`
-  - `POST /admin/domains/{domain}/redis_acl/rotate`
+---
 
-## UI Notes
+## UI Highlights
 
-- If unauthenticated, only login is shown.
-- Header includes persistent light/dark mode toggle and direct Admin entry.
-- Log viewer supports search, parsed/raw mode, expand, and copy.
-- AI log helper supports:
-  - failure remediation
-  - summary
-  - error extraction
-  - retry tuning
-  - custom question mode
+- **Login gate**: unauthenticated users see only the auth screen
+- **Operate view**: live job list with inline run/edit/delete
+- **Observe view**: run history and real-time status
+- **Worker detail**: metrics trends, concurrency Gantt timeline, operational event history
+- **Log viewer**: search/highlight, parsed/raw toggle, expand, copy
+- **AI assistant**: integrated in log view and job creation form
+- **Dark/light mode** persistent toggle
+- **Admin panel**: domain management, credential CRUD, token rotation
 
-## Redis Keys (Core)
-
-- `job_queue:<domain>:pending`
-- `job_queue:<domain>:<worker_id>`
-- `workers:<domain>:<worker_id>`
-- `worker_heartbeats:<domain>`
-- `worker_running_set:<domain>:<worker_id>`
-- `job_running:<domain>:<job_id>`
-- `worker_metrics:<domain>:<worker_id>:history`
-- `run_events:<domain>`
-- `worker_ops:<domain>:<worker_id>`
-- `log_stream:<domain>:<run_id>*`
-
-## Troubleshooting
-
-- `CORS` errors:
-  - Set `CORS_ALLOW_ORIGINS` correctly (`comma-separated` or `*`)
-  - Ensure scheduler is reachable from UI host
-- Worker unauthorized/offline:
-  - Verify `DOMAIN` + `API_TOKEN`
-  - Verify domain token rotation did not invalidate old workers
-  - If ACL required, verify `REDIS_PASSWORD`
-- Storage pressure:
-  - Low disk can corrupt Mongo startup; recover space before restart
-  - Check `docker system df` and prune unused cache/volumes carefully
+---
 
 ## Development
 
-- Scheduler local:
-  - `uvicorn scheduler.main:app --reload --host 0.0.0.0 --port 8000`
-- UI local:
-  - `cd ui && npm install && npm run dev`
-  - Cypress e2e:
-    - `cd ui && npm run cypress:open` (interactive)
-    - `cd ui && npm run cypress:run` (headless, expects UI at `http://localhost:5173`)
-- Helpful docs/scripts:
-  - `doc/docker-compose-workflows.md`
-  - `doc/testing.md`
-  - `scripts/`
+```bash
+# Scheduler (hot-reload)
+uvicorn scheduler.main:app --reload --host 0.0.0.0 --port 8000
+
+# UI (Vite dev server)
+cd ui && npm install && npm run dev
+
+# Backend tests
+python -m pytest tests/ --ignore=tests/test_end_to_end.py -v
+
+# UI unit tests
+cd ui && npx vitest run
+
+# Cypress e2e (requires UI running)
+cd ui && npm run cypress:open   # interactive
+cd ui && npm run cypress:run    # headless
+```
+
+See also: [`doc/docker-compose-workflows.md`](doc/docker-compose-workflows.md), [`doc/testing.md`](doc/testing.md)
+
+---
+
+## Troubleshooting
+
+- **CORS errors**: set `CORS_ALLOW_ORIGINS` (comma-separated or `*`); ensure scheduler is reachable from the UI host.
+- **Worker unauthorized/offline**: verify `DOMAIN` + `API_TOKEN`; re-rotate domain token if invalidated; verify `REDIS_PASSWORD` if ACL is required.
+- **Storage pressure**: low disk can corrupt MongoDB startup — recover space before restarting, check `docker system df`.
+
+---
+
+## Redis Key Layout
+
+```
+job_queue:<domain>:pending
+job_queue:<domain>:<worker_id>
+workers:<domain>:<worker_id>
+worker_heartbeats:<domain>
+worker_running_set:<domain>:<worker_id>
+job_running:<domain>:<job_id>
+worker_metrics:<domain>:<worker_id>:history
+run_events:<domain>
+worker_ops:<domain>:<worker_id>
+log_stream:<domain>:<run_id>*
+```
+
+---
+
+## License
+
+[MIT](LICENSE)
