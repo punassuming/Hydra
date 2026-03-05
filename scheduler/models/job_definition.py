@@ -83,6 +83,7 @@ class JobDefinition(BaseModel):
     on_failure_webhooks: List[str] = Field(default_factory=list)
     on_failure_email_to: List[str] = Field(default_factory=list)
     on_failure_email_credential_ref: Optional[str] = None
+    triggers_on_artifacts: List[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -116,6 +117,7 @@ class JobCreate(BaseModel):
     on_failure_webhooks: List[str] = Field(default_factory=list)
     on_failure_email_to: List[str] = Field(default_factory=list)
     on_failure_email_credential_ref: Optional[str] = None
+    triggers_on_artifacts: List[str] = Field(default_factory=list)
 
 
 class JobUpdate(BaseModel):
@@ -138,6 +140,7 @@ class JobUpdate(BaseModel):
     on_failure_webhooks: Optional[List[str]] = None
     on_failure_email_to: Optional[List[str]] = None
     on_failure_email_credential_ref: Optional[str] = None
+    triggers_on_artifacts: Optional[List[str]] = None
 
 
 class JobValidationResult(BaseModel):

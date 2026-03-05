@@ -185,3 +185,130 @@ def test_source_config_git_sparse():
     assert s.protocol == "git"
     assert s.sparse is True
     assert s.path == "services/my-svc"
+
+
+def test_job_definition_triggers_on_artifacts_field():
+    """JobDefinition, JobCreate, and JobUpdate all accept triggers_on_artifacts."""
+    from scheduler.models.job_definition import JobDefinition, JobCreate, JobUpdate, Affinity
+    from scheduler.models.executor import ShellExecutor
+
+    job = JobDefinition(
+        name="consumer",
+        user="alice",
+        affinity=Affinity(),
+        executor=ShellExecutor(script="echo downstream"),
+        triggers_on_artifacts=["daily_export", "ml_model"],
+    )
+    assert job.triggers_on_artifacts == ["daily_export", "ml_model"]
+
+    create = JobCreate(
+        name="consumer2",
+        triggers_on_artifacts=["upstream_data"],
+    )
+    assert create.triggers_on_artifacts == ["upstream_data"]
+
+    update = JobUpdate(triggers_on_artifacts=["new_artifact"])
+    assert update.triggers_on_artifacts == ["new_artifact"]
+
+    # Default is empty list
+    job_default = JobDefinition(
+        name="no-trigger", user="bob", affinity=Affinity(), executor=ShellExecutor(script="echo hi")
+    )
+    assert job_default.triggers_on_artifacts == []
+
+
+def test_handle_artifact_emitted_upserts_and_triggers(monkeypatch):
+    """_handle_artifact_emitted upserts the artifact doc and enqueues triggered jobs."""
+    import time
+    from unittest.mock import MagicMock, patch
+    from scheduler.run_events import _handle_artifact_emitted
+
+    mock_db = MagicMock()
+    mock_r = MagicMock()
+
+    # A downstream job that listens to "daily_export"
+    triggered_job = {
+        "_id": "job-downstream",
+        "priority": 7,
+        "schedule": {"enabled": True},
+    }
+    mock_db.job_definitions.find.return_value = [triggered_job]
+
+    with patch("scheduler.run_events.get_db", return_value=mock_db), \
+         patch("scheduler.run_events.get_redis", return_value=mock_r):
+        _handle_artifact_emitted({
+            "type": "artifact_emitted",
+            "domain": "prod",
+            "artifact_name": "daily_export",
+            "run_id": "run-abc",
+            "job_id": "job-upstream",
+            "metadata": {"rows": 500},
+        })
+
+    # Artifact was upserted
+    mock_db.artifacts.update_one.assert_called_once()
+    call_args = mock_db.artifacts.update_one.call_args
+    assert call_args[0][0] == {"domain": "prod", "name": "daily_export"}
+    upsert_doc = call_args[0][1]["$set"]
+    assert upsert_doc["metadata"] == {"rows": 500}
+    assert upsert_doc["last_run_id"] == "run-abc"
+    assert upsert_doc["last_job_id"] == "job-upstream"
+
+    # Downstream job was enqueued in the pending queue
+    mock_r.zadd.assert_called_once_with("job_queue:prod:pending", {"job-downstream": 7.0})
+
+    # Metadata was stored as params for env injection
+    hset_call = mock_r.hset.call_args
+    mapping = hset_call[1]["mapping"]
+    assert mapping["reason"] == "artifact_trigger:daily_export"
+    assert "params" in mapping
+    import json
+    params = json.loads(mapping["params"])
+    assert "HYDRA_UPSTREAM_ARTIFACT_METADATA" in params
+    inner = json.loads(params["HYDRA_UPSTREAM_ARTIFACT_METADATA"])
+    assert inner == {"rows": 500}
+
+
+def test_handle_artifact_emitted_no_triggered_jobs(monkeypatch):
+    """When no jobs subscribe to an artifact, no queue writes happen."""
+    from unittest.mock import MagicMock, patch
+    from scheduler.run_events import _handle_artifact_emitted
+
+    mock_db = MagicMock()
+    mock_r = MagicMock()
+    mock_db.job_definitions.find.return_value = []
+
+    with patch("scheduler.run_events.get_db", return_value=mock_db), \
+         patch("scheduler.run_events.get_redis", return_value=mock_r):
+        _handle_artifact_emitted({
+            "domain": "prod",
+            "artifact_name": "unused_artifact",
+            "run_id": "run-xyz",
+            "job_id": "job-src",
+            "metadata": {},
+        })
+
+    mock_db.artifacts.update_one.assert_called_once()
+    mock_r.zadd.assert_not_called()
+
+
+def test_handle_artifact_emitted_missing_name(monkeypatch):
+    """Events with no artifact_name are silently ignored (no DB writes)."""
+    from unittest.mock import MagicMock, patch
+    from scheduler.run_events import _handle_artifact_emitted
+
+    mock_db = MagicMock()
+    mock_r = MagicMock()
+
+    with patch("scheduler.run_events.get_db", return_value=mock_db), \
+         patch("scheduler.run_events.get_redis", return_value=mock_r):
+        _handle_artifact_emitted({
+            "domain": "prod",
+            "artifact_name": "",
+            "run_id": "run-xyz",
+            "job_id": "job-src",
+            "metadata": {},
+        })
+
+    mock_db.artifacts.update_one.assert_not_called()
+    mock_r.zadd.assert_not_called()

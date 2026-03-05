@@ -1,8 +1,10 @@
 package worker
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -253,4 +255,85 @@ func TestAppendWorkerOp_Format(t *testing.T) {
 	// Just verify the function signature/pattern compiles and doesn't panic on nil rdb.
 	// Full integration test needs Redis. This validates code paths without Redis.
 	_ = fmt.Sprintf("worker_ops:%s:%s", "domain", "worker")
+}
+
+func TestHandleStdout_ArtifactInterception(t *testing.T) {
+	// Replicate the handleStdout closure logic to verify artifact parsing.
+	const artifactPrefix = "__HYDRA_ARTIFACT__:"
+
+	type artifactEvent struct {
+		Name     string
+		Metadata map[string]interface{}
+	}
+
+	var emittedArtifacts []artifactEvent
+	var loggedLines []string
+
+	fakePublish := func(name string, metadata map[string]interface{}) {
+		emittedArtifacts = append(emittedArtifacts, artifactEvent{name, metadata})
+	}
+	fakeLog := func(line string) {
+		loggedLines = append(loggedLines, line)
+	}
+
+	handleStdout := func(line string) {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, artifactPrefix) {
+			rawJSON := strings.TrimSpace(trimmed[len(artifactPrefix):])
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(rawJSON), &parsed); err == nil {
+				artifactName, _ := parsed["name"].(string)
+				artifactName = strings.TrimSpace(artifactName)
+				if artifactName != "" {
+					metadata, _ := parsed["metadata"].(map[string]interface{})
+					if metadata == nil {
+						metadata = map[string]interface{}{}
+					}
+					fakePublish(artifactName, metadata)
+					return
+				}
+			}
+		}
+		fakeLog(line)
+	}
+
+	// Normal line passes through
+	handleStdout("regular output")
+	if len(loggedLines) != 1 || loggedLines[0] != "regular output" {
+		t.Errorf("expected normal line to be logged, got %v", loggedLines)
+	}
+	if len(emittedArtifacts) != 0 {
+		t.Errorf("expected no artifacts emitted for normal line")
+	}
+
+	// Valid artifact line is intercepted and not logged
+	handleStdout(`__HYDRA_ARTIFACT__: {"name": "my_export", "metadata": {"rows": 100}}`)
+	if len(emittedArtifacts) != 1 {
+		t.Fatalf("expected 1 artifact emitted, got %d", len(emittedArtifacts))
+	}
+	if emittedArtifacts[0].Name != "my_export" {
+		t.Errorf("expected artifact name 'my_export', got %q", emittedArtifacts[0].Name)
+	}
+	if rows, ok := emittedArtifacts[0].Metadata["rows"].(float64); !ok || rows != 100 {
+		t.Errorf("expected rows=100 in metadata, got %v", emittedArtifacts[0].Metadata)
+	}
+	// Artifact line should NOT be forwarded to the log
+	if len(loggedLines) != 1 {
+		t.Errorf("artifact line should not appear in log, loggedLines=%v", loggedLines)
+	}
+
+	// Malformed JSON falls through to logging
+	handleStdout("__HYDRA_ARTIFACT__: {not valid json}")
+	if len(loggedLines) != 2 {
+		t.Errorf("malformed artifact line should be logged, got %v", loggedLines)
+	}
+	if len(emittedArtifacts) != 1 {
+		t.Errorf("no new artifact should be emitted for malformed JSON")
+	}
+
+	// Artifact with whitespace trimming
+	handleStdout("  __HYDRA_ARTIFACT__:  {\"name\": \"trimmed\", \"metadata\": {}}  ")
+	if len(emittedArtifacts) != 2 || emittedArtifacts[1].Name != "trimmed" {
+		t.Errorf("expected trimmed artifact to be emitted, got %v", emittedArtifacts)
+	}
 }

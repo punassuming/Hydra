@@ -415,6 +415,39 @@ func (w *workerState) runJob(ctx context.Context, env *executor.JobEnvelope) {
 		w.rdb.Expire(ctx, historyKey, time.Hour)
 	}
 
+	const artifactPrefix = "__HYDRA_ARTIFACT__:"
+
+	// handleStdout intercepts artifact emission lines and emits run events,
+	// passing all other lines through to the normal log stream.
+	handleStdout := func(line string) {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, artifactPrefix) {
+			rawJSON := strings.TrimSpace(trimmed[len(artifactPrefix):])
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(rawJSON), &parsed); err == nil {
+				artifactName, _ := parsed["name"].(string)
+				artifactName = strings.TrimSpace(artifactName)
+				if artifactName != "" {
+					metadata, _ := parsed["metadata"].(map[string]interface{})
+					if metadata == nil {
+						metadata = map[string]interface{}{}
+					}
+					w.publishRunEvent(ctx, map[string]interface{}{
+						"type":          "artifact_emitted",
+						"run_id":        runID,
+						"job_id":        jobID,
+						"domain":        w.cfg.Domain,
+						"artifact_name": artifactName,
+						"metadata":      metadata,
+					})
+					return
+				}
+			}
+			// Malformed artifact line — fall through to normal logging.
+		}
+		streamLog("stdout", line)
+	}
+
 	// Inject runtime params into executor env.
 	if len(env.Params) > 0 {
 		if env.Job.Executor.Env == nil {
@@ -438,7 +471,7 @@ func (w *workerState) runJob(ctx context.Context, env *executor.JobEnvelope) {
 	for i := 0; i < attempts; i++ {
 		runStartTime := time.Now()
 		result = executor.Execute(jobCtx, env,
-			func(line string) { streamLog("stdout", line) },
+			func(line string) { handleStdout(line) },
 			func(line string) { streamLog("stderr", line) },
 		)
 		attemptsUsed++

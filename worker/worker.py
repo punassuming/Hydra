@@ -213,8 +213,6 @@ def worker_main():
                     "text": chunk,
                     "stream": kind,
                 }
-                import json
-
                 data = json.dumps(payload)
                 channel = f"log_stream:{domain}:{run_id}"
                 history_key = f"log_stream:{domain}:{run_id}:history"
@@ -223,6 +221,30 @@ def worker_main():
                 r.publish(channel, data)
                 r.expire(history_key, 3600)
                 r.expire(channel, 3600)
+
+            _ARTIFACT_PREFIX = "__HYDRA_ARTIFACT__:"
+
+            def handle_stdout(text: str):
+                stripped = text.strip()
+                if stripped.startswith(_ARTIFACT_PREFIX):
+                    raw_json = stripped[len(_ARTIFACT_PREFIX):].strip()
+                    try:
+                        artifact_payload = json.loads(raw_json)
+                        artifact_name = str(artifact_payload.get("name") or "").strip()
+                        metadata = artifact_payload.get("metadata") or {}
+                        if artifact_name:
+                            publish_run_event({
+                                "type": "artifact_emitted",
+                                "run_id": run_id,
+                                "job_id": job_id,
+                                "domain": domain,
+                                "artifact_name": artifact_name,
+                                "metadata": metadata,
+                            })
+                    except Exception:
+                        stream_log("stdout", text)
+                    return
+                stream_log("stdout", text)
 
             # Inject runtime params as environment variables
             params = envelope.get("params") or {}
@@ -251,7 +273,7 @@ def worker_main():
                 run_start_time = time.time()
                 rc, stdout, stderr = execute_job(
                     job,
-                    log_callback_out=lambda text: stream_log("stdout", text),
+                    log_callback_out=handle_stdout,
                     log_callback_err=lambda text: stream_log("stderr", text),
                     kill_event=kill_event,
                 )
