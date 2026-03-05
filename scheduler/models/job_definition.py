@@ -68,6 +68,7 @@ class JobDefinition(BaseModel):
     user: str = "default"
     domain: str = "prod"
     bypass_concurrency: bool = False
+    global_locks: List[str] = Field(default_factory=list)
     source: Optional[SourceConfig] = None
     affinity: Affinity
     executor: ExecutorConfig = Field(default_factory=lambda: ShellExecutor(script=""))
@@ -102,6 +103,7 @@ class JobCreate(BaseModel):
     user: str = "default"
     domain: str = "prod"
     bypass_concurrency: bool = False
+    global_locks: List[str] = Field(default_factory=list)
     source: Optional[SourceConfig] = None
     affinity: Affinity = Field(default_factory=Affinity)
     executor: ExecutorConfig = Field(default_factory=lambda: ShellExecutor(script=""))
@@ -125,6 +127,7 @@ class JobUpdate(BaseModel):
     user: Optional[str] = None
     domain: Optional[str] = None
     bypass_concurrency: Optional[bool] = None
+    global_locks: Optional[List[str]] = None
     source: Optional[SourceConfig] = None
     affinity: Optional[Affinity] = None
     executor: Optional[ExecutorConfig] = None
