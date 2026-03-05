@@ -1,4 +1,5 @@
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
+import os
 
 
 def _contains_all(text: str, needles: list) -> Tuple[bool, str]:
@@ -43,3 +44,32 @@ def evaluate_completion(job: Dict, rc: int, stdout: str, stderr: str) -> Tuple[b
         return False, f"stderr {reason}"
 
     return True, "criteria satisfied"
+
+
+def evaluate_file_criteria(job: Dict, run_start_time: float) -> Tuple[bool, str]:
+    """Check file-based completion criteria after job execution.
+
+    Args:
+        job: The job definition dict.
+        run_start_time: The job's actual start time as a UTC Unix timestamp (float).
+
+    Returns:
+        (success, reason) tuple. success is False if any file check fails.
+    """
+    criteria = job.get("completion") or {}
+    require_exists = criteria.get("require_file_exists") or []
+    require_updated = criteria.get("require_file_updated_since_start") or []
+
+    for path in require_exists:
+        if not os.path.exists(path):
+            return False, f"required file does not exist: {path}"
+
+    for path in require_updated:
+        try:
+            stat = os.stat(path)
+        except OSError:
+            return False, f"required file does not exist: {path}"
+        if stat.st_mtime < run_start_time:
+            return False, f"required file was not updated since job start: {path}"
+
+    return True, "file criteria satisfied"

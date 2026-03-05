@@ -436,15 +436,23 @@ func (w *workerState) runJob(ctx context.Context, env *executor.JobEnvelope) {
 	success := false
 
 	for i := 0; i < attempts; i++ {
+		runStartTime := time.Now()
 		result = executor.Execute(jobCtx, env,
 			func(line string) { streamLog("stdout", line) },
 			func(line string) { streamLog("stderr", line) },
 		)
 		attemptsUsed++
 		success, lastReason = evaluateCompletion(env.Job.Completion, result)
-		if success {
-			break
+		if !success {
+			continue
 		}
+		if fileOK, fileReason := evaluateFileCriteria(env.Job.Completion, runStartTime); !fileOK {
+			success = false
+			lastReason = fileReason
+			streamLog("stderr", "[hydra] file validation failed: "+fileReason)
+			continue
+		}
+		break
 	}
 
 	status := "success"
@@ -550,6 +558,28 @@ func evaluateCompletion(comp *executor.Completion, r *executor.ExecResult) (bool
 		}
 	}
 	return true, "criteria satisfied"
+}
+
+// evaluateFileCriteria checks file-existence and file-update-time criteria.
+func evaluateFileCriteria(comp *executor.Completion, runStartTime time.Time) (bool, string) {
+	if comp == nil {
+		return true, "file criteria satisfied"
+	}
+	for _, path := range comp.RequireFileExists {
+		if _, err := os.Stat(path); err != nil {
+			return false, fmt.Sprintf("required file does not exist: %s", path)
+		}
+	}
+	for _, path := range comp.RequireFileUpdatedSinceStart {
+		info, err := os.Stat(path)
+		if err != nil {
+			return false, fmt.Sprintf("required file does not exist: %s", path)
+		}
+		if info.ModTime().Before(runStartTime) {
+			return false, fmt.Sprintf("required file was not updated since job start: %s", path)
+		}
+	}
+	return true, "file criteria satisfied"
 }
 
 // ---------------------------------------------------------------------------
