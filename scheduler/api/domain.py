@@ -22,6 +22,7 @@ def get_domain_settings(request: Request) -> Dict:
         "display_name": doc.get("display_name", domain),
         "description": doc.get("description", ""),
         "worker_redis_acl_user": worker_acl_username(domain),
+        "global_lock_limits": doc.get("global_lock_limits") or {},
     }
 
 
@@ -30,13 +31,21 @@ def update_domain_settings(payload: Dict, request: Request) -> Dict:
     domain = getattr(request.state, "domain", "prod")
     display_name = (payload.get("display_name") or domain).strip() or domain
     description = (payload.get("description") or "").strip()
+    raw_limits = payload.get("global_lock_limits")
+    global_lock_limits: Dict[str, int] = {}
+    if isinstance(raw_limits, dict):
+        for k, v in raw_limits.items():
+            try:
+                global_lock_limits[str(k)] = max(1, int(v))
+            except (TypeError, ValueError):
+                pass
     db = get_db()
     db.domains.update_one(
         {"domain": domain},
-        {"$set": {"display_name": display_name, "description": description}},
+        {"$set": {"display_name": display_name, "description": description, "global_lock_limits": global_lock_limits}},
         upsert=True,
     )
-    return {"ok": True, "domain": domain, "display_name": display_name, "description": description}
+    return {"ok": True, "domain": domain, "display_name": display_name, "description": description, "global_lock_limits": global_lock_limits}
 
 
 @router.post("/token/rotate")
