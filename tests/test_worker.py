@@ -1,7 +1,7 @@
 import platform
 from worker.utils.os_exec import run_command, run_python
 from worker.executor import execute_job
-from worker.utils.completion import evaluate_completion
+from worker.utils.completion import evaluate_completion, evaluate_file_criteria
 from worker.utils.python_env import prepare_python_command
 from worker.utils.completion import _contains_all, _contains_none
 
@@ -105,7 +105,69 @@ def test_completion_helpers_are_strict():
     assert not success and "forbidden" in reason.lower()
 
 
-def test_git_token_injection_https():
+def test_file_criteria_require_file_exists_passes():
+    import tempfile, os, time
+    with tempfile.NamedTemporaryFile(delete=False) as f:
+        path = f.name
+    try:
+        job = {"completion": {"require_file_exists": [path]}}
+        ok, reason = evaluate_file_criteria(job, time.time())
+        assert ok, reason
+    finally:
+        os.unlink(path)
+
+
+def test_file_criteria_require_file_exists_fails_missing():
+    import time
+    job = {"completion": {"require_file_exists": ["/nonexistent/hydra_test_file_xyz.txt"]}}
+    ok, reason = evaluate_file_criteria(job, time.time())
+    assert not ok
+    assert "does not exist" in reason
+
+
+def test_file_criteria_require_file_updated_since_start_passes():
+    import tempfile, os, time
+    start = time.time() - 1  # file written after this
+    with tempfile.NamedTemporaryFile(delete=False) as f:
+        f.write(b"data")
+        path = f.name
+    try:
+        job = {"completion": {"require_file_updated_since_start": [path]}}
+        ok, reason = evaluate_file_criteria(job, start)
+        assert ok, reason
+    finally:
+        os.unlink(path)
+
+
+def test_file_criteria_require_file_updated_since_start_fails_old_file():
+    import tempfile, os, time
+    with tempfile.NamedTemporaryFile(delete=False) as f:
+        f.write(b"old data")
+        path = f.name
+    try:
+        # Set a future start time so the file appears not updated since start
+        future_start = time.time() + 100
+        job = {"completion": {"require_file_updated_since_start": [path]}}
+        ok, reason = evaluate_file_criteria(job, future_start)
+        assert not ok
+        assert "not updated since" in reason
+    finally:
+        os.unlink(path)
+
+
+def test_file_criteria_require_file_updated_since_start_fails_missing():
+    import time
+    job = {"completion": {"require_file_updated_since_start": ["/nonexistent/hydra_test_xyz.txt"]}}
+    ok, reason = evaluate_file_criteria(job, time.time())
+    assert not ok
+    assert "does not exist" in reason
+
+
+def test_file_criteria_no_criteria_passes():
+    import time
+    job = {"completion": {}}
+    ok, reason = evaluate_file_criteria(job, time.time())
+    assert ok
     from worker.utils.git import _inject_token_into_url
     url = "https://github.com/user/repo.git"
     result = _inject_token_into_url(url, "mytoken")

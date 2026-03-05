@@ -48,6 +48,8 @@ class CompletionCriteria(BaseModel):
     stdout_not_contains: List[str] = Field(default_factory=list)
     stderr_contains: List[str] = Field(default_factory=list)
     stderr_not_contains: List[str] = Field(default_factory=list)
+    require_file_exists: List[str] = Field(default_factory=list)
+    require_file_updated_since_start: List[str] = Field(default_factory=list)
 
 
 class SourceConfig(BaseModel):

@@ -17,7 +17,7 @@ from .config import (
 )
 from .utils.heartbeat import start_heartbeat
 from .utils.concurrency import incr_running, add_active_job, remove_active_job
-from .utils.completion import evaluate_completion
+from .utils.completion import evaluate_completion, evaluate_file_criteria
 from .executor import execute_job
 
 
@@ -248,6 +248,7 @@ def worker_main():
             last_reason = ""
             success = False
             for _ in range(max(1, attempts)):
+                run_start_time = time.time()
                 rc, stdout, stderr = execute_job(
                     job,
                     log_callback_out=lambda text: stream_log("stdout", text),
@@ -256,6 +257,12 @@ def worker_main():
                 )
                 attempts_used += 1
                 success, last_reason = evaluate_completion(job, rc, stdout, stderr)
+                if success:
+                    file_ok, file_reason = evaluate_file_criteria(job, run_start_time)
+                    if not file_ok:
+                        success = False
+                        last_reason = file_reason
+                        stream_log("stderr", f"[hydra] file validation failed: {file_reason}")
                 if success:
                     break
 

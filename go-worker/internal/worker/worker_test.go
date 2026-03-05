@@ -2,7 +2,9 @@ package worker
 
 import (
 	"fmt"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/punassuming/hydra/go-worker/internal/executor"
 )
@@ -118,6 +120,89 @@ func TestEvaluateCompletion_EmptyForbiddenToken(t *testing.T) {
 	ok, _ := evaluateCompletion(comp, &executor.ExecResult{ReturnCode: 0, Stdout: "anything"})
 	if !ok {
 		t.Error("expected success when forbidden token is empty string")
+	}
+}
+
+func TestEvaluateFileCriteria_NilCompletion(t *testing.T) {
+	ok, _ := evaluateFileCriteria(nil, time.Now())
+	if !ok {
+		t.Error("expected success for nil completion")
+	}
+}
+
+func TestEvaluateFileCriteria_RequireFileExists_Pass(t *testing.T) {
+	f, err := os.CreateTemp("", "hydra-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	defer os.Remove(f.Name())
+
+	comp := &executor.Completion{RequireFileExists: []string{f.Name()}}
+	ok, reason := evaluateFileCriteria(comp, time.Now())
+	if !ok {
+		t.Errorf("expected success for existing file, got: %s", reason)
+	}
+}
+
+func TestEvaluateFileCriteria_RequireFileExists_Fail(t *testing.T) {
+	comp := &executor.Completion{RequireFileExists: []string{"/nonexistent/hydra_test_file_xyz.txt"}}
+	ok, reason := evaluateFileCriteria(comp, time.Now())
+	if ok {
+		t.Error("expected failure for non-existent file")
+	}
+	if reason == "" {
+		t.Error("expected non-empty reason")
+	}
+}
+
+func TestEvaluateFileCriteria_RequireFileUpdatedSinceStart_Pass(t *testing.T) {
+	start := time.Now().Add(-1 * time.Second)
+
+	f, err := os.CreateTemp("", "hydra-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString("updated data")
+	f.Close()
+	defer os.Remove(f.Name())
+
+	comp := &executor.Completion{RequireFileUpdatedSinceStart: []string{f.Name()}}
+	ok, reason := evaluateFileCriteria(comp, start)
+	if !ok {
+		t.Errorf("expected success for recently created file, got: %s", reason)
+	}
+}
+
+func TestEvaluateFileCriteria_RequireFileUpdatedSinceStart_Fail_OldFile(t *testing.T) {
+	f, err := os.CreateTemp("", "hydra-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString("old data")
+	f.Close()
+	defer os.Remove(f.Name())
+
+	// Set start time in the future so the file appears not updated since start.
+	futureStart := time.Now().Add(100 * time.Second)
+	comp := &executor.Completion{RequireFileUpdatedSinceStart: []string{f.Name()}}
+	ok, reason := evaluateFileCriteria(comp, futureStart)
+	if ok {
+		t.Error("expected failure when file mtime is before run start")
+	}
+	if reason == "" {
+		t.Error("expected non-empty reason")
+	}
+}
+
+func TestEvaluateFileCriteria_RequireFileUpdatedSinceStart_Fail_Missing(t *testing.T) {
+	comp := &executor.Completion{RequireFileUpdatedSinceStart: []string{"/nonexistent/hydra_test_xyz.txt"}}
+	ok, reason := evaluateFileCriteria(comp, time.Now())
+	if ok {
+		t.Error("expected failure for non-existent file")
+	}
+	if reason == "" {
+		t.Error("expected non-empty reason")
 	}
 }
 

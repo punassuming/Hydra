@@ -36,11 +36,13 @@ type Schedule struct {
 
 // Completion defines success/failure criteria for a run.
 type Completion struct {
-	ExitCodes         []int    `json:"exit_codes"`
-	StdoutContains    []string `json:"stdout_contains"`
-	StdoutNotContains []string `json:"stdout_not_contains"`
-	StderrContains    []string `json:"stderr_contains"`
-	StderrNotContains []string `json:"stderr_not_contains"`
+	ExitCodes                    []int    `json:"exit_codes"`
+	StdoutContains               []string `json:"stdout_contains"`
+	StdoutNotContains            []string `json:"stdout_not_contains"`
+	StderrContains               []string `json:"stderr_contains"`
+	StderrNotContains            []string `json:"stderr_not_contains"`
+	RequireFileExists            []string `json:"require_file_exists"`
+	RequireFileUpdatedSinceStart []string `json:"require_file_updated_since_start"`
 }
 
 // Source describes a git (or other) source to fetch before execution.
