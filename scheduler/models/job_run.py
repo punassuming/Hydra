@@ -28,6 +28,7 @@ class JobRun(BaseModel):
     completion_reason: Optional[str] = None
     duration: Optional[float] = None
     bypass_concurrency: Optional[bool] = None
+    sla_miss_alerted: bool = False
 
     class Config:
         populate_by_name = True

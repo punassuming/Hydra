@@ -136,6 +136,7 @@ export interface JobDefinition {
   on_failure_webhooks?: string[];
   on_failure_email_to?: string[];
   on_failure_email_credential_ref?: string;
+  sla_max_duration_seconds?: number | null;
   created_at: string;
   updated_at: string;
 }
