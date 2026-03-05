@@ -362,12 +362,76 @@ def _handle_run_end(payload: Dict[str, Any]):
                 )
 
 
+def _handle_artifact_emitted(payload: Dict[str, Any]):
+    """Upsert artifact record and trigger downstream jobs that subscribe to it."""
+    db = get_db()
+    r = get_redis()
+    domain = str(payload.get("domain") or "prod").strip()
+    artifact_name = str(payload.get("artifact_name") or "").strip()
+    run_id = str(payload.get("run_id") or "").strip()
+    job_id = str(payload.get("job_id") or "").strip()
+    metadata = payload.get("metadata") or {}
+
+    if not artifact_name:
+        log.warning("artifact_emitted event missing artifact_name; skipping")
+        return
+
+    now = datetime.utcnow()
+    db.artifacts.update_one(
+        {"domain": domain, "name": artifact_name},
+        {
+            "$set": {
+                "domain": domain,
+                "name": artifact_name,
+                "last_updated": now,
+                "last_run_id": run_id,
+                "last_job_id": job_id,
+                "metadata": metadata,
+            }
+        },
+        upsert=True,
+    )
+    log.info("Upserted artifact '%s' in domain '%s' from run %s", artifact_name, domain, run_id)
+
+    # Find jobs that should be triggered when this artifact is updated.
+    triggered_jobs = list(db.job_definitions.find(
+        {"domain": domain, "triggers_on_artifacts": artifact_name, "schedule.enabled": True}
+    ))
+    if not triggered_jobs:
+        return
+
+    metadata_json = json.dumps(metadata)
+    params = json.dumps({"HYDRA_UPSTREAM_ARTIFACT_METADATA": metadata_json})
+    for dep_job in triggered_jobs:
+        dep_id = dep_job["_id"]
+        priority = int(dep_job.get("priority", 5))
+        r.zadd(f"job_queue:{domain}:pending", {dep_id: float(priority)})
+        r.hset(
+            f"job_enqueue_meta:{domain}:{dep_id}",
+            mapping={
+                "enqueued_ts": time.time(),
+                "reason": f"artifact_trigger:{artifact_name}",
+                "upstream_artifact_name": artifact_name,
+                "upstream_run_id": run_id,
+                "upstream_job_id": job_id,
+                "params": params,
+            },
+        )
+        r.expire(f"job_enqueue_meta:{domain}:{dep_id}", 24 * 3600)
+        log.info(
+            "Triggered job %s due to artifact '%s' update (upstream run %s)",
+            dep_id, artifact_name, run_id,
+        )
+
+
 def _handle_event(payload: Dict[str, Any]):
     etype = str(payload.get("type") or "").strip()
     if etype == "run_start":
         _handle_run_start(payload)
     elif etype == "run_end":
         _handle_run_end(payload)
+    elif etype == "artifact_emitted":
+        _handle_artifact_emitted(payload)
 
 
 def run_event_loop(stop_event: threading.Event):

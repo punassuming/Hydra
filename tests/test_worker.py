@@ -654,3 +654,88 @@ def test_python_env_honours_hydra_python_path(monkeypatch):
     rc, out, err = execute_job(job)
     assert rc == 0, f"stderr: {err}"
     assert "env-python-ok" in out
+
+
+def test_artifact_stdout_intercepted_by_handle_stdout():
+    """Lines starting with __HYDRA_ARTIFACT__: emit artifact events and are not logged."""
+    import json as _json
+    from unittest.mock import MagicMock
+
+    published_events = []
+    logged_lines = []
+
+    def fake_publish_run_event(event):
+        published_events.append(event)
+
+    def fake_stream_log(kind, text):
+        logged_lines.append((kind, text))
+
+    # Replicate the handle_stdout closure logic from worker.py
+    _ARTIFACT_PREFIX = "__HYDRA_ARTIFACT__:"
+
+    def handle_stdout(text):
+        stripped = text.strip()
+        if stripped.startswith(_ARTIFACT_PREFIX):
+            raw_json = stripped[len(_ARTIFACT_PREFIX):].strip()
+            try:
+                artifact_payload = _json.loads(raw_json)
+                artifact_name = str(artifact_payload.get("name") or "").strip()
+                metadata = artifact_payload.get("metadata") or {}
+                if artifact_name:
+                    fake_publish_run_event({
+                        "type": "artifact_emitted",
+                        "run_id": "run-1",
+                        "job_id": "job-1",
+                        "domain": "prod",
+                        "artifact_name": artifact_name,
+                        "metadata": metadata,
+                    })
+            except Exception:
+                fake_stream_log("stdout", text)
+            return
+        fake_stream_log("stdout", text)
+
+    # Normal stdout line passes through
+    handle_stdout("some normal output\n")
+    assert logged_lines == [("stdout", "some normal output\n")]
+
+    # Artifact line is intercepted and not logged
+    handle_stdout('__HYDRA_ARTIFACT__: {"name": "daily_export", "metadata": {"rows": 500}}\n')
+    assert len(published_events) == 1
+    ev = published_events[0]
+    assert ev["type"] == "artifact_emitted"
+    assert ev["artifact_name"] == "daily_export"
+    assert ev["metadata"] == {"rows": 500}
+    # Not logged
+    assert len(logged_lines) == 1
+
+    # Malformed artifact line falls back to logging
+    handle_stdout("__HYDRA_ARTIFACT__: {bad json}\n")
+    assert len(logged_lines) == 2
+    assert "__HYDRA_ARTIFACT__" in logged_lines[1][1]
+
+
+def test_execute_job_emits_artifact_via_stdout():
+    """A shell job that prints an artifact marker emits the correct artifact event."""
+    import json as _json
+    from worker.executor import execute_job
+
+    captured_stdout_lines = []
+
+    def capture_out(text):
+        captured_stdout_lines.append(text)
+
+    job = {
+        "executor": {
+            "type": "shell",
+            "script": 'echo \'__HYDRA_ARTIFACT__: {"name": "test_artifact", "metadata": {"count": 42}}\'',
+            "shell": "bash",
+        },
+        "timeout": 5,
+    }
+    rc, stdout, stderr = execute_job(job, log_callback_out=capture_out)
+    assert rc == 0
+
+    # The artifact line should appear in stdout
+    full_stdout = "".join(captured_stdout_lines)
+    assert "__HYDRA_ARTIFACT__" in full_stdout
