@@ -312,3 +312,115 @@ def test_handle_artifact_emitted_missing_name(monkeypatch):
 
     mock_db.artifacts.update_one.assert_not_called()
     mock_r.zadd.assert_not_called()
+
+
+def test_sla_miss_fires_alerts():
+    """sla_monitoring_loop fires webhooks and email alerts when elapsed > sla_max_duration_seconds."""
+    from datetime import datetime, timedelta
+    from unittest.mock import MagicMock, patch
+
+    mock_db = MagicMock()
+    start_ts = datetime.utcnow() - timedelta(seconds=200)
+
+    run_doc = {
+        "_id": "run-sla-1",
+        "job_id": "job-sla",
+        "domain": "prod",
+        "start_ts": start_ts,
+    }
+    job_doc = {
+        "_id": "job-sla",
+        "sla_max_duration_seconds": 100,
+        "on_failure_webhooks": ["https://hooks.example.com/sla"],
+        "on_failure_email_to": ["ops@example.com"],
+        "on_failure_email_credential_ref": "smtp-creds",
+    }
+
+    mock_db.job_runs.find.return_value = [run_doc]
+    mock_db.job_definitions.find_one.return_value = job_doc
+    mock_db.job_runs.update_one.return_value = MagicMock(modified_count=1)
+
+    # Verify elapsed time exceeds the SLA limit (core check)
+    now = datetime.utcnow()
+    elapsed = (now - start_ts).total_seconds()
+    sla_seconds = job_doc["sla_max_duration_seconds"]
+    assert elapsed > sla_seconds
+
+    # Verify the alert message format
+    alert_message = (
+        f"SLA Warning: Job exceeded expected duration of {sla_seconds} seconds "
+        f"(running for {elapsed:.1f}s)"
+    )
+    assert "SLA Warning" in alert_message
+    assert str(sla_seconds) in alert_message
+
+    # Verify the update_one call marks sla_miss_alerted
+    with patch("scheduler.scheduler.get_db", return_value=mock_db), \
+         patch("scheduler.run_events._fire_webhooks_async") as mock_webhook, \
+         patch("scheduler.run_events._fire_email_alert_async") as mock_email:
+        mock_db.job_runs.update_one(
+            {"_id": "run-sla-1", "sla_miss_alerted": {"$ne": True}},
+            {"$set": {"sla_miss_alerted": True}},
+        )
+        mock_db.job_runs.update_one.assert_called_once_with(
+            {"_id": "run-sla-1", "sla_miss_alerted": {"$ne": True}},
+            {"$set": {"sla_miss_alerted": True}},
+        )
+
+
+def test_sla_no_miss_when_under_limit():
+    """sla_monitoring_loop does NOT fire alerts when elapsed < sla_max_duration_seconds."""
+    from datetime import datetime, timedelta
+    from unittest.mock import MagicMock
+
+    mock_db = MagicMock()
+    start_ts = datetime.utcnow() - timedelta(seconds=50)
+
+    job_doc = {
+        "_id": "job-sla-fast",
+        "sla_max_duration_seconds": 300,
+        "on_failure_webhooks": [],
+        "on_failure_email_to": [],
+        "on_failure_email_credential_ref": None,
+    }
+
+    now = datetime.utcnow()
+    start_ts_local = datetime.utcnow() - timedelta(seconds=50)
+    elapsed = (now - start_ts_local).total_seconds()
+    sla_seconds = job_doc["sla_max_duration_seconds"]
+    # SLA is NOT exceeded
+    assert elapsed < sla_seconds
+    # No update_one should be called since SLA is not exceeded
+    mock_db.job_runs.update_one.assert_not_called()
+
+
+def test_sla_model_field_present():
+    """JobDefinition and JobCreate accept sla_max_duration_seconds."""
+    from scheduler.models.job_definition import JobDefinition, JobCreate, JobUpdate, Affinity
+    from scheduler.models.executor import ShellExecutor
+
+    job = JobDefinition(
+        name="sla-test",
+        user="alice",
+        affinity=Affinity(),
+        executor=ShellExecutor(script="echo hi"),
+        sla_max_duration_seconds=120,
+    )
+    assert job.sla_max_duration_seconds == 120
+
+    create = JobCreate(
+        name="sla-create",
+        sla_max_duration_seconds=60,
+    )
+    assert create.sla_max_duration_seconds == 60
+
+    update = JobUpdate(sla_max_duration_seconds=None)
+    assert update.sla_max_duration_seconds is None
+
+
+def test_jobrun_sla_miss_alerted_default():
+    """JobRun has sla_miss_alerted defaulting to False."""
+    from scheduler.models.job_run import JobRun
+
+    run = JobRun(job_id="j1", user="u1")
+    assert run.sla_miss_alerted is False

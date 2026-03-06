@@ -35,6 +35,7 @@ export interface JobPayload {
   on_failure_webhooks?: string[];
   on_failure_email_to?: string[];
   on_failure_email_credential_ref?: string;
+  sla_max_duration_seconds?: number | null;
 }
 
 export interface ValidationResult {

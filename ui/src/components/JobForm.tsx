@@ -87,6 +87,7 @@ const createDefaultPayload = (): JobPayload => ({
   on_failure_webhooks: [],
   on_failure_email_to: [],
   on_failure_email_credential_ref: "",
+  sla_max_duration_seconds: null,
 });
 
 interface Props {
@@ -245,6 +246,7 @@ export function JobForm({
         on_failure_webhooks: selectedJob.on_failure_webhooks ?? [],
         on_failure_email_to: selectedJob.on_failure_email_to ?? [],
         on_failure_email_credential_ref: selectedJob.on_failure_email_credential_ref ?? "",
+        sla_max_duration_seconds: selectedJob.sla_max_duration_seconds ?? null,
       });
       setNotifyWebhookEnabled((selectedJob.on_failure_webhooks ?? []).length > 0);
       setNotifyEmailEnabled((selectedJob.on_failure_email_to ?? []).length > 0 || Boolean(selectedJob.on_failure_email_credential_ref));
@@ -1324,6 +1326,20 @@ export function JobForm({
                     style={{ width: "100%" }}
                     value={payload.timeout}
                     onChange={(value) => updatePayload("timeout", Number(value))}
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item
+                  label="SLA Max Duration (seconds)"
+                  tooltip="Alert (without stopping) if the job runs longer than this many seconds. Leave blank to disable."
+                >
+                  <InputNumber
+                    min={1}
+                    style={{ width: "100%" }}
+                    value={payload.sla_max_duration_seconds ?? undefined}
+                    onChange={(value) => updatePayload("sla_max_duration_seconds", value ?? null)}
+                    placeholder="No SLA limit"
                   />
                 </Form.Item>
               </Col>

@@ -319,6 +319,68 @@ def schedule_trigger_loop(stop_event: threading.Event):
         time.sleep(1)
 
 
+def sla_monitoring_loop(stop_event: threading.Event):
+    from .run_events import _fire_webhooks_async, _fire_email_alert_async
+    db = get_db()
+    log.info("SLA monitoring loop started")
+    while not stop_event.is_set():
+        try:
+            now = datetime.utcnow()
+            cursor = db.job_runs.find(
+                {"status": "running", "sla_miss_alerted": {"$ne": True}},
+                {"_id": 1, "job_id": 1, "domain": 1, "start_ts": 1},
+            )
+            for run_doc in cursor:
+                run_id = run_doc.get("_id")
+                job_id = run_doc.get("job_id")
+                domain = run_doc.get("domain", "prod")
+                start_ts = run_doc.get("start_ts")
+                if not start_ts or not job_id:
+                    continue
+                if not isinstance(start_ts, datetime):
+                    try:
+                        start_ts = datetime.fromisoformat(str(start_ts))
+                    except Exception:
+                        continue
+                elapsed = (now - start_ts).total_seconds()
+                job_doc = db.job_definitions.find_one(
+                    {"_id": job_id},
+                    {"sla_max_duration_seconds": 1, "on_failure_webhooks": 1, "on_failure_email_to": 1, "on_failure_email_credential_ref": 1},
+                )
+                if not job_doc:
+                    continue
+                sla_seconds = job_doc.get("sla_max_duration_seconds")
+                try:
+                    sla_seconds = int(sla_seconds) if sla_seconds is not None else 0
+                except (TypeError, ValueError):
+                    continue
+                if sla_seconds <= 0:
+                    continue
+                if elapsed > sla_seconds:
+                    result = db.job_runs.update_one(
+                        {"_id": run_id, "sla_miss_alerted": {"$ne": True}},
+                        {"$set": {"sla_miss_alerted": True}},
+                    )
+                    if result.modified_count == 0:
+                        continue
+                    log.warning(
+                        "SLA missed for job %s run %s (%.1fs > %ss); firing alerts",
+                        job_id, run_id, elapsed, sla_seconds,
+                    )
+                    alert_message = (
+                        f"SLA Warning: Job exceeded expected duration of {sla_seconds} seconds "
+                        f"(running for {elapsed:.1f}s)"
+                    )
+                    webhooks = job_doc.get("on_failure_webhooks") or []
+                    _fire_webhooks_async(webhooks, job_id, run_id, alert_message)
+                    email_to = job_doc.get("on_failure_email_to") or []
+                    email_cred_ref = str(job_doc.get("on_failure_email_credential_ref") or "").strip()
+                    _fire_email_alert_async(db, domain, email_cred_ref, email_to, job_id, run_id, alert_message)
+        except Exception as exc:
+            log.exception("Error in SLA monitoring loop: %s", exc)
+        time.sleep(30)
+
+
 def timeout_enforcement_loop(stop_event: threading.Event):
     r = get_redis()
     db = get_db()
