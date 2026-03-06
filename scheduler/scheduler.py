@@ -411,3 +411,113 @@ def timeout_enforcement_loop(stop_event: threading.Event):
         except Exception as exc:
             log.exception("Error in timeout enforcement loop: %s", exc)
         time.sleep(5)
+
+
+def backfill_dispatch_loop(stop_event: threading.Event):
+    """Process backfill queue items and dispatch them to available workers.
+
+    Each item in ``backfill_queue:{domain}`` (a Redis list) is a JSON object
+    with ``job_id``, ``execution_date``, ``priority``, and ``domain``.  For
+    each item, the loop selects an available worker using the same affinity and
+    capacity rules as the main scheduling loop, then pushes a job envelope to
+    the worker's queue with ``HYDRA_EXECUTION_DATE`` and ``HYDRA_IS_BACKFILL``
+    injected as runtime parameters (env vars).
+    """
+    r = get_redis()
+    db = get_db()
+    ttl = int(os.getenv("SCHEDULER_HEARTBEAT_TTL", "10"))
+    log.info("Backfill dispatch loop started (heartbeat TTL=%ss)", ttl)
+    while not stop_event.is_set():
+        try:
+            domains = list(r.smembers("hydra:domains") or []) or ["prod"]
+            backfill_keys = [f"backfill_queue:{d}" for d in domains]
+            popped = r.blpop(backfill_keys, timeout=2)
+            if not popped:
+                continue
+            _key, raw = popped
+            try:
+                item = json.loads(raw)
+            except Exception:
+                log.warning("Invalid backfill queue item (not JSON): %s", raw)
+                continue
+
+            job_id = item.get("job_id", "")
+            execution_date = item.get("execution_date", "")
+            domain = item.get("domain", "prod")
+            priority = float(item.get("priority", 5))
+
+            if not job_id or not execution_date:
+                log.warning("Backfill item missing job_id or execution_date; skipping")
+                continue
+
+            job = db.job_definitions.find_one({"_id": job_id})
+            if not job:
+                log.error("Backfill: job_id %s not found; skipping date %s", job_id, execution_date)
+                continue
+
+            domain = job.get("domain", domain)
+            bypass_concurrency = bool(job.get("bypass_concurrency", False))
+
+            candidates = [
+                w
+                for w in list_online_workers(ttl, domain, respect_capacity=not bypass_concurrency)
+                if passes_affinity(job, w)
+            ]
+            worker = select_best_worker(candidates)
+            if not worker:
+                # No worker available; put the item back at the front of the queue and back off.
+                log.warning(
+                    "Backfill: no eligible worker for job %s date %s; requeuing",
+                    job_id, execution_date,
+                )
+                r.lpush(f"backfill_queue:{domain}", raw)
+                time.sleep(2)
+                continue
+
+            wid = worker["worker_id"]
+            dispatched_job = _resolve_credential_refs(job, db)
+            enqueued_ts = time.time()
+            envelope = {
+                "job_id": job_id,
+                "domain": domain,
+                "job": _json_ready(dispatched_job),
+                "enqueued_ts": enqueued_ts,
+                "dispatch_ts": time.time(),
+                "enqueue_reason": "backfill",
+                "retry_attempt": 0,
+                "params": {
+                    "HYDRA_EXECUTION_DATE": execution_date,
+                    "HYDRA_IS_BACKFILL": "true",
+                },
+            }
+            r.rpush(f"job_queue:{domain}:{wid}", json.dumps(envelope))
+            append_worker_op(
+                domain=domain,
+                worker_id=wid,
+                op_type="dispatch",
+                message=f"Backfill job {job_id} dispatched (date={execution_date})",
+                details={
+                    "job_id": job_id,
+                    "execution_date": execution_date,
+                    "enqueue_reason": "backfill",
+                    "bypass_concurrency": bypass_concurrency,
+                },
+            )
+            event_bus.publish(
+                "job_dispatched",
+                {
+                    "job_id": job_id,
+                    "worker_id": wid,
+                    "domain": domain,
+                    "bypass_concurrency": bypass_concurrency,
+                    "execution_date": execution_date,
+                    "enqueue_reason": "backfill",
+                },
+            )
+            log.info(
+                "Dispatched backfill job %s (date=%s) to worker %s",
+                job_id, execution_date, wid,
+            )
+        except Exception as e:
+            log.exception("Error in backfill dispatch loop: %s", e)
+            time.sleep(1)
