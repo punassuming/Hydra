@@ -424,3 +424,198 @@ def test_jobrun_sla_miss_alerted_default():
 
     run = JobRun(job_id="j1", user="u1")
     assert run.sla_miss_alerted is False
+
+
+# ── Backfill endpoint tests ────────────────────────────────────────────────
+
+
+def test_backfill_queues_one_item_per_day():
+    """backfill_job pushes exactly one item per day between start and end."""
+    from unittest.mock import MagicMock, patch
+    from fastapi import Request
+    from scheduler.api.jobs import backfill_job, BackfillRequest
+
+    mock_db = MagicMock()
+    mock_r = MagicMock()
+    mock_event_bus = MagicMock()
+
+    mock_db.job_definitions.find_one.return_value = {
+        "_id": "job-1",
+        "domain": "prod",
+        "priority": 5,
+    }
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.state.domain = "prod"
+    mock_request.state.is_admin = False
+
+    with patch("scheduler.api.jobs.get_db", return_value=mock_db), \
+         patch("scheduler.api.jobs.get_redis", return_value=mock_r), \
+         patch("scheduler.api.jobs.event_bus", mock_event_bus):
+        result = backfill_job(
+            "job-1",
+            BackfillRequest(start_date="2024-01-01", end_date="2024-01-05"),
+            mock_request,
+        )
+
+    assert result["queued_count"] == 5
+    assert result["start_date"] == "2024-01-01"
+    assert result["end_date"] == "2024-01-05"
+    assert mock_r.rpush.call_count == 5
+
+
+def test_backfill_single_day():
+    """A single-day backfill queues exactly one run."""
+    from unittest.mock import MagicMock, patch
+    from fastapi import Request
+    from scheduler.api.jobs import backfill_job, BackfillRequest
+
+    mock_db = MagicMock()
+    mock_r = MagicMock()
+    mock_event_bus = MagicMock()
+
+    mock_db.job_definitions.find_one.return_value = {
+        "_id": "job-2",
+        "domain": "prod",
+        "priority": 3,
+    }
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.state.domain = "prod"
+    mock_request.state.is_admin = False
+
+    with patch("scheduler.api.jobs.get_db", return_value=mock_db), \
+         patch("scheduler.api.jobs.get_redis", return_value=mock_r), \
+         patch("scheduler.api.jobs.event_bus", mock_event_bus):
+        result = backfill_job(
+            "job-2",
+            BackfillRequest(start_date="2024-03-15", end_date="2024-03-15"),
+            mock_request,
+        )
+
+    assert result["queued_count"] == 1
+    mock_r.rpush.assert_called_once()
+
+
+def test_backfill_rejects_end_before_start():
+    """backfill_job raises 422 when end_date < start_date."""
+    import pytest
+    from fastapi import HTTPException
+    from unittest.mock import MagicMock, patch
+    from fastapi import Request
+    from scheduler.api.jobs import backfill_job, BackfillRequest
+
+    mock_db = MagicMock()
+    mock_r = MagicMock()
+    mock_db.job_definitions.find_one.return_value = {
+        "_id": "job-3",
+        "domain": "prod",
+        "priority": 5,
+    }
+    mock_request = MagicMock(spec=Request)
+    mock_request.state.domain = "prod"
+    mock_request.state.is_admin = False
+
+    with patch("scheduler.api.jobs.get_db", return_value=mock_db), \
+         patch("scheduler.api.jobs.get_redis", return_value=mock_r):
+        with pytest.raises(HTTPException) as exc_info:
+            backfill_job(
+                "job-3",
+                BackfillRequest(start_date="2024-06-30", end_date="2024-06-01"),
+                mock_request,
+            )
+    assert exc_info.value.status_code == 422
+
+
+def test_backfill_rejects_exceeding_max_days():
+    """backfill_job raises 422 when the range exceeds the 366-day limit."""
+    import pytest
+    from fastapi import HTTPException
+    from unittest.mock import MagicMock, patch
+    from fastapi import Request
+    from scheduler.api.jobs import backfill_job, BackfillRequest
+
+    mock_db = MagicMock()
+    mock_r = MagicMock()
+    mock_db.job_definitions.find_one.return_value = {
+        "_id": "job-4",
+        "domain": "prod",
+        "priority": 5,
+    }
+    mock_request = MagicMock(spec=Request)
+    mock_request.state.domain = "prod"
+    mock_request.state.is_admin = False
+
+    with patch("scheduler.api.jobs.get_db", return_value=mock_db), \
+         patch("scheduler.api.jobs.get_redis", return_value=mock_r):
+        with pytest.raises(HTTPException) as exc_info:
+            backfill_job(
+                "job-4",
+                BackfillRequest(start_date="2023-01-01", end_date="2025-01-01"),
+                mock_request,
+            )
+    assert exc_info.value.status_code == 422
+
+
+def test_backfill_rejects_missing_job():
+    """backfill_job raises 404 when the job does not exist."""
+    import pytest
+    from fastapi import HTTPException
+    from unittest.mock import MagicMock, patch
+    from fastapi import Request
+    from scheduler.api.jobs import backfill_job, BackfillRequest
+
+    mock_db = MagicMock()
+    mock_r = MagicMock()
+    mock_db.job_definitions.find_one.return_value = None
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.state.domain = "prod"
+    mock_request.state.is_admin = False
+
+    with patch("scheduler.api.jobs.get_db", return_value=mock_db), \
+         patch("scheduler.api.jobs.get_redis", return_value=mock_r):
+        with pytest.raises(HTTPException) as exc_info:
+            backfill_job(
+                "nonexistent-job",
+                BackfillRequest(start_date="2024-01-01", end_date="2024-01-03"),
+                mock_request,
+            )
+    assert exc_info.value.status_code == 404
+
+
+def test_backfill_items_contain_execution_date():
+    """Each backfill item pushed to Redis contains the correct execution_date."""
+    import json
+    from unittest.mock import MagicMock, patch, call
+    from fastapi import Request
+    from scheduler.api.jobs import backfill_job, BackfillRequest
+
+    mock_db = MagicMock()
+    mock_r = MagicMock()
+    mock_event_bus = MagicMock()
+
+    mock_db.job_definitions.find_one.return_value = {
+        "_id": "job-5",
+        "domain": "prod",
+        "priority": 7,
+    }
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.state.domain = "prod"
+    mock_request.state.is_admin = False
+
+    with patch("scheduler.api.jobs.get_db", return_value=mock_db), \
+         patch("scheduler.api.jobs.get_redis", return_value=mock_r), \
+         patch("scheduler.api.jobs.event_bus", mock_event_bus):
+        backfill_job(
+            "job-5",
+            BackfillRequest(start_date="2024-02-01", end_date="2024-02-03"),
+            mock_request,
+        )
+
+    pushed_items = [json.loads(c.args[1]) for c in mock_r.rpush.call_args_list]
+    dates = [item["execution_date"] for item in pushed_items]
+    assert dates == ["2024-02-01", "2024-02-02", "2024-02-03"]
+    assert all(item["job_id"] == "job-5" for item in pushed_items)
+    assert all(item["domain"] == "prod" for item in pushed_items)

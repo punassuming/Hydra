@@ -15,7 +15,7 @@ from .api.admin import router as admin_router
 from .api.credentials import router as credentials_router
 from .api.domain import router as domain_router
 from .api.ai import router as ai_router
-from .scheduler import scheduling_loop, failover_loop, schedule_trigger_loop, timeout_enforcement_loop, sla_monitoring_loop
+from .scheduler import scheduling_loop, failover_loop, schedule_trigger_loop, timeout_enforcement_loop, sla_monitoring_loop, backfill_dispatch_loop
 from .run_events import run_event_loop
 from .utils.logging import setup_logging
 from .utils.auth import enforce_api_key
@@ -104,12 +104,14 @@ def on_startup():
     app.state.run_event_thread = threading.Thread(target=run_event_loop, args=(stop_event,), daemon=True)
     app.state.timeout_thread = threading.Thread(target=timeout_enforcement_loop, args=(stop_event,), daemon=True)
     app.state.sla_thread = threading.Thread(target=sla_monitoring_loop, args=(stop_event,), daemon=True)
+    app.state.backfill_thread = threading.Thread(target=backfill_dispatch_loop, args=(stop_event,), daemon=True)
     app.state.scheduler_thread.start()
     app.state.failover_thread.start()
     app.state.schedule_thread.start()
     app.state.run_event_thread.start()
     app.state.timeout_thread.start()
     app.state.sla_thread.start()
+    app.state.backfill_thread.start()
 
 
 @app.on_event("shutdown")
@@ -122,6 +124,7 @@ def on_shutdown():
     th4 = getattr(app.state, "run_event_thread", None)
     th5 = getattr(app.state, "timeout_thread", None)
     th6 = getattr(app.state, "sla_thread", None)
+    th7 = getattr(app.state, "backfill_thread", None)
     if th1:
         th1.join(timeout=2)
     if th2:
@@ -134,3 +137,5 @@ def on_shutdown():
         th5.join(timeout=2)
     if th6:
         th6.join(timeout=2)
+    if th7:
+        th7.join(timeout=2)

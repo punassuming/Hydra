@@ -6,7 +6,7 @@ import { JobRuns } from "../components/JobRuns";
 import { JobGridView } from "../components/JobGridView";
 import { JobGanttView } from "../components/JobGanttView";
 import { JobGraphView } from "../components/JobGraphView";
-import { fetchJob, fetchJobRuns, runJobNow, killRun } from "../api/jobs";
+import { fetchJob, fetchJobRuns, runJobNow, killRun, backfillJob } from "../api/jobs";
 import { useActiveDomain } from "../context/ActiveDomainContext";
 
 export function JobDetailPage() {
@@ -18,6 +18,9 @@ export function JobDetailPage() {
   const { domain } = useActiveDomain();
   const [paramsModalVisible, setParamsModalVisible] = useState(false);
   const [paramsText, setParamsText] = useState("");
+  const [backfillModalVisible, setBackfillModalVisible] = useState(false);
+  const [backfillStartDate, setBackfillStartDate] = useState("");
+  const [backfillEndDate, setBackfillEndDate] = useState("");
 
   const jobQuery = useQuery({
     queryKey: ["job", domain, jobId],
@@ -61,6 +64,16 @@ export function JobDetailPage() {
     onError: () => messageApi.error("Failed to send kill signal"),
   });
 
+  const backfillMutation = useMutation({
+    mutationFn: ({ id, start, end }: { id: string; start: string; end: string }) =>
+      backfillJob(id, start, end),
+    onSuccess: (data) => {
+      messageApi.success(`Backfill queued: ${data.queued_count} runs (${data.start_date} → ${data.end_date})`);
+      queryClient.invalidateQueries({ queryKey: ["job-runs", domain, jobId] });
+    },
+    onError: () => messageApi.error("Failed to queue backfill"),
+  });
+
   const handleRunNow = () => {
     setParamsModalVisible(true);
   };
@@ -70,6 +83,22 @@ export function JobDetailPage() {
     manualRun.mutate({ id: job!._id, params: Object.keys(params).length ? params : undefined });
     setParamsModalVisible(false);
     setParamsText("");
+  };
+
+  const handleBackfill = () => {
+    const today = new Date().toISOString().slice(0, 10);
+    setBackfillStartDate(today);
+    setBackfillEndDate(today);
+    setBackfillModalVisible(true);
+  };
+
+  const handleBackfillSubmit = () => {
+    if (!backfillStartDate || !backfillEndDate) {
+      messageApi.error("Please select both start and end dates");
+      return;
+    }
+    backfillMutation.mutate({ id: job!._id, start: backfillStartDate, end: backfillEndDate });
+    setBackfillModalVisible(false);
   };
 
   const job = jobQuery.data;
@@ -193,6 +222,7 @@ export function JobDetailPage() {
           </Space>
           <Space>
             <Button onClick={handleRunNow} loading={manualRun.isPending}>Run Now</Button>
+            <Button onClick={handleBackfill} loading={backfillMutation.isPending}>Backfill</Button>
             <Button onClick={() => navigate("/")}>Back to Jobs</Button>
           </Space>
         </Space>
@@ -217,6 +247,40 @@ export function JobDetailPage() {
               autoSize={{ minRows: 4 }}
             />
           </Form.Item>
+        </Form>
+      </Modal>
+      <Modal
+        open={backfillModalVisible}
+        title="Backfill: Queue Historical Runs"
+        onOk={handleBackfillSubmit}
+        onCancel={() => setBackfillModalVisible(false)}
+        okText="Queue Backfill"
+        confirmLoading={backfillMutation.isPending}
+      >
+        <Form layout="vertical">
+          <Form.Item
+            label="Start Date"
+            extra="First day of the backfill range (inclusive)."
+          >
+            <Input
+              type="date"
+              value={backfillStartDate}
+              onChange={(e) => setBackfillStartDate(e.target.value)}
+            />
+          </Form.Item>
+          <Form.Item
+            label="End Date"
+            extra="Last day of the backfill range (inclusive). Maximum 366 days."
+          >
+            <Input
+              type="date"
+              value={backfillEndDate}
+              onChange={(e) => setBackfillEndDate(e.target.value)}
+            />
+          </Form.Item>
+          <Typography.Text type="secondary">
+            One run will be queued per day with <code>HYDRA_EXECUTION_DATE</code> set to each date (YYYY-MM-DD).
+          </Typography.Text>
         </Form>
       </Modal>
     </Space>

@@ -75,6 +75,11 @@ export const runJobNow = (jobId: string, params?: Record<string, string>) =>
   apiClient.post<{ job_id: string; queued: boolean }>(`/jobs/${jobId}/run`, { params: params ?? {} });
 export const killRun = (runId: string) => apiClient.post<{ run_id: string; signal: string }>(`/runs/${runId}/kill`, {});
 export const runAdhocJob = (payload: JobPayload) => apiClient.post<JobDefinition>("/jobs/adhoc", payload);
+export const backfillJob = (jobId: string, startDate: string, endDate: string) =>
+  apiClient.post<{ job_id: string; queued_count: number; start_date: string; end_date: string }>(
+    `/jobs/${jobId}/backfill`,
+    { start_date: startDate, end_date: endDate },
+  );
 
 export const generateJob = (prompt: string, provider: "gemini" | "openai" = "gemini", model?: string) => 
     apiClient.post<JobPayload>("/ai/generate_job", { prompt, provider, model });

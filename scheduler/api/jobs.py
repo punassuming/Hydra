@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from typing import List, Dict, Any, Optional
 import json
 import time
@@ -313,6 +313,83 @@ def run_job_now(job_id: str, request: Request, body: RunJobRequest = Body(defaul
     )
     event_bus.publish("job_manual_run", {"job_id": job_id, "domain": doc.get("domain", "prod")})
     return {"job_id": job_id, "queued": True}
+
+
+_MAX_BACKFILL_DAYS = 366
+
+
+class BackfillRequest(BaseModel):
+    start_date: str  # YYYY-MM-DD
+    end_date: str    # YYYY-MM-DD
+
+
+@router.post("/jobs/{job_id}/backfill")
+def backfill_job(job_id: str, body: BackfillRequest, request: Request):
+    """Queue a batch of historical runs for a job over a date range.
+
+    For each day between start_date and end_date (inclusive), a run is pushed
+    to the backfill queue with HYDRA_EXECUTION_DATE injected as an environment
+    variable so the worker script knows which logical partition to process.
+    """
+    db = get_db()
+    r = get_redis()
+    doc = db.job_definitions.find_one({"_id": job_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="job not found")
+    domain = getattr(request.state, "domain", "prod")
+    is_admin = getattr(request.state, "is_admin", False)
+    if not is_admin and doc.get("domain", "prod") != domain:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    try:
+        start_dt = date.fromisoformat(body.start_date.strip()[:10])
+        end_dt = date.fromisoformat(body.end_date.strip()[:10])
+    except ValueError:
+        raise HTTPException(status_code=422, detail="start_date and end_date must be in YYYY-MM-DD format")
+
+    if end_dt < start_dt:
+        raise HTTPException(status_code=422, detail="end_date must be >= start_date")
+
+    num_days = (end_dt - start_dt).days + 1
+    if num_days > _MAX_BACKFILL_DAYS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"backfill range exceeds maximum of {_MAX_BACKFILL_DAYS} days",
+        )
+
+    job_domain = doc.get("domain", "prod")
+    priority = int(doc.get("priority", 5))
+    r.sadd("hydra:domains", job_domain)
+
+    current = start_dt
+    queued_count = 0
+    while current <= end_dt:
+        item = json.dumps({
+            "job_id": job_id,
+            "execution_date": current.isoformat(),
+            "priority": priority,
+            "domain": job_domain,
+        })
+        r.rpush(f"backfill_queue:{job_domain}", item)
+        current += timedelta(days=1)
+        queued_count += 1
+
+    event_bus.publish(
+        "job_backfill",
+        {
+            "job_id": job_id,
+            "domain": job_domain,
+            "start_date": start_dt.isoformat(),
+            "end_date": end_dt.isoformat(),
+            "queued_count": queued_count,
+        },
+    )
+    return {
+        "job_id": job_id,
+        "queued_count": queued_count,
+        "start_date": start_dt.isoformat(),
+        "end_date": end_dt.isoformat(),
+    }
 
 
 @router.post("/runs/{run_id}/kill")
