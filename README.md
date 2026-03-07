@@ -62,7 +62,7 @@
 - **Workers** are Redis-only at runtime: register metadata, heartbeat with rolling metrics (memory/CPU/load), execute jobs, stream logs, and emit lifecycle events — they never connect to MongoDB.
 - **MongoDB** stores durable state: `domains`, `job_definitions`, `job_runs`, `credentials`.
 
-> See [`doc/architecture.md`](doc/architecture.md) for a detailed Mermaid diagram.
+> See [`docs/architecture.md`](docs/architecture.md) for a detailed Mermaid diagram.
 
 ---
 
@@ -354,7 +354,7 @@ cd ui && npm run cypress:open   # interactive
 cd ui && npm run cypress:run    # headless
 ```
 
-See also: [`doc/docker-compose-workflows.md`](doc/docker-compose-workflows.md), [`doc/testing.md`](doc/testing.md)
+See also: [`docs/docker-compose-workflows.md`](docs/docker-compose-workflows.md), [`docs/testing.md`](docs/testing.md)
 
 ---
 

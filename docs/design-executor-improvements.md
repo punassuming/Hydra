@@ -535,8 +535,8 @@ No schema version bump needed — all new fields are optional with defaults.
 
 | # | Task | Files Changed | Effort |
 |---|---|---|---|
-| 4.1 | Update architecture docs | `doc/architecture.md`, `AGENTS.md` | Small |
-| 4.2 | Windows deployment guide for user control | `doc/` (new) | Small |
+| 4.1 | Update architecture docs | `docs/architecture.md`, `AGENTS.md` | Small |
+| 4.2 | Windows deployment guide for user control | `docs/` (new) | Small |
 | 4.3 | Update README with new features | `README.md` | Small |
 
 ---
