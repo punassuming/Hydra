@@ -123,6 +123,6 @@ Both Python and Go workers support the following executor types:
 
 Workers maintain a persistent cache directory for source workspaces. Cache entries are keyed by `(url, ref, path, protocol)` hash and support:
 - **LRU eviction** with configurable max size (`WORKER_WORKSPACE_CACHE_MAX_MB`)
-- **TTL-based expiry** (`WORKER_WORKSPACE_CACHE_TTL`)
+- **Configurable TTL metadata** (`WORKER_WORKSPACE_CACHE_TTL`) based on the last recorded cache-use timestamp
 - **Git fast-update** (fetch + checkout instead of full clone on cache hit)
 - **Cache modes** per job: `auto` (default), `always`, `never`
