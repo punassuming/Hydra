@@ -276,10 +276,10 @@ Where `content_hash` = hash of `(source.url, source.ref, source.path, source.pro
 
 | Variable | Default | Description |
 |---|---|---|
-| `WORKER_WORKSPACE_CACHE_DIR` | OS temp dir + `/hydra-workspace-cache` (Python: `tempfile.gettempdir()`, Go: `os.TempDir()`) | Root directory for cached workspaces |
-| `WORKER_WORKSPACE_CACHE_MAX_MB` | `1024` | Maximum total cache size in MB. Size limit takes precedence over TTL — entries within TTL are still evicted (oldest first) if total size exceeds this limit. |
+| `WORKER_WORKSPACE_CACHE_DIR` | `<OS temp dir>/hydra-workspace-cache` (for example `/tmp/hydra-workspace-cache` on Linux; Python uses `tempfile.gettempdir()`, Go uses `os.TempDir()`) | Root directory for cached workspaces |
+| `WORKER_WORKSPACE_CACHE_MAX_MB` | `1024` | Maximum total cache size in MB. This behaves as a soft cap during a run: a fetch/update can temporarily grow the cache, then eviction runs and removes the oldest entries until the cache is back under the limit. |
 | `WORKER_WORKSPACE_CACHE_PERSIST` | `true` | Keep cache across worker restarts |
-| `WORKER_WORKSPACE_CACHE_TTL` | `3600` | Seconds of inactivity before a cache entry is eligible for eviction. Entries within TTL may still be evicted if the size limit is exceeded. |
+| `WORKER_WORKSPACE_CACHE_TTL` | `3600` | Configured TTL value for cache entries, intended to represent seconds since the last recorded cache use (the `.hydra_cache_ts` touch timestamp). The current eviction logic primarily uses size-based LRU removal, so this value is present for cache policy configuration but is not the main eviction trigger today. |
 
 **Locking:** Use file-based locks (`.lock` files) to prevent concurrent runs from the same job from colliding on the same cache entry. Each execution acquires a shared read lock; cache updates (git pull, eviction) acquire exclusive write locks.
 
@@ -535,8 +535,8 @@ No schema version bump needed — all new fields are optional with defaults.
 
 | # | Task | Files Changed | Effort |
 |---|---|---|---|
-| 4.1 | Update architecture docs | `doc/architecture.md`, `AGENTS.md` | Small |
-| 4.2 | Windows deployment guide for user control | `doc/` (new) | Small |
+| 4.1 | Update architecture docs | `docs/architecture.md`, `AGENTS.md` | Small |
+| 4.2 | Windows deployment guide for user control | `docs/` (new) | Small |
 | 4.3 | Update README with new features | `README.md` | Small |
 
 ---
