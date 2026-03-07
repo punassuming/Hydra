@@ -619,3 +619,148 @@ def test_backfill_items_contain_execution_date():
     assert dates == ["2024-02-01", "2024-02-02", "2024-02-03"]
     assert all(item["job_id"] == "job-5" for item in pushed_items)
     assert all(item["domain"] == "prod" for item in pushed_items)
+
+
+# ---------------------------------------------------------------------------
+# Sensor executor tests
+# ---------------------------------------------------------------------------
+
+def test_sensor_executor_model_defaults():
+    from scheduler.models.executor import SensorExecutor
+    s = SensorExecutor(target="https://example.com/health")
+    assert s.type == "sensor"
+    assert s.sensor_type == "http"
+    assert s.poll_interval_seconds == 30
+    assert s.timeout_seconds == 3600
+    assert s.expected_status == [200]
+    assert s.method == "GET"
+
+
+def test_sensor_executor_model_sql():
+    from scheduler.models.executor import SensorExecutor
+    s = SensorExecutor(
+        sensor_type="sql",
+        target="SELECT 1 FROM my_table WHERE ready = true LIMIT 1",
+        credential_ref="my-db",
+        poll_interval_seconds=60,
+        timeout_seconds=7200,
+    )
+    assert s.sensor_type == "sql"
+    assert s.credential_ref == "my-db"
+    assert s.poll_interval_seconds == 60
+
+
+def test_validate_sensor_executor_http():
+    from scheduler.models.executor import SensorExecutor
+    job = JobDefinition(
+        name="http-sensor",
+        user="a",
+        affinity=Affinity(),
+        executor=SensorExecutor(target="https://api.example.com/ready"),
+    )
+    result = _validate_job_definition(job)
+    assert result.valid, result.errors
+
+
+def test_validate_sensor_executor_sql_with_credential():
+    from scheduler.models.executor import SensorExecutor
+    job = JobDefinition(
+        name="sql-sensor",
+        user="a",
+        affinity=Affinity(),
+        executor=SensorExecutor(
+            sensor_type="sql",
+            target="SELECT 1 FROM ready_table LIMIT 1",
+            credential_ref="my-db-cred",
+        ),
+    )
+    result = _validate_job_definition(job)
+    assert result.valid, result.errors
+
+
+def test_validate_sensor_executor_sql_with_connection_uri():
+    from scheduler.models.executor import SensorExecutor
+    job = JobDefinition(
+        name="sql-sensor-uri",
+        user="a",
+        affinity=Affinity(),
+        executor=SensorExecutor(
+            sensor_type="sql",
+            target="SELECT 1 FROM ready_table LIMIT 1",
+            connection_uri="postgresql://user:pass@localhost/db",
+        ),
+    )
+    result = _validate_job_definition(job)
+    assert result.valid, result.errors
+
+
+def test_validate_sensor_executor_empty_target_fails():
+    from scheduler.models.executor import SensorExecutor
+    job = JobDefinition(
+        name="bad-sensor",
+        user="a",
+        affinity=Affinity(),
+        executor=SensorExecutor(target="   "),
+    )
+    result = _validate_job_definition(job)
+    assert not result.valid
+    assert any("target" in e for e in result.errors)
+
+
+def test_validate_sensor_executor_sql_no_connection_fails():
+    from scheduler.models.executor import SensorExecutor
+    job = JobDefinition(
+        name="sql-sensor-no-conn",
+        user="a",
+        affinity=Affinity(),
+        executor=SensorExecutor(sensor_type="sql", target="SELECT 1"),
+    )
+    result = _validate_job_definition(job)
+    assert not result.valid
+    assert any("connection_uri or credential_ref" in e for e in result.errors)
+
+
+def test_activate_sensor_writes_to_redis():
+    """_activate_sensor stores state in Redis and emits a run_start event."""
+    import json
+    from unittest.mock import MagicMock, call
+    from scheduler.scheduler import _activate_sensor
+
+    mock_r = MagicMock()
+    job = {
+        "_id": "sensor-job-1",
+        "user": "alice",
+        "domain": "prod",
+        "executor": {
+            "type": "sensor",
+            "sensor_type": "http",
+            "target": "https://example.com/health",
+            "poll_interval_seconds": 15,
+            "timeout_seconds": 300,
+        },
+    }
+    _activate_sensor(mock_r, job, "prod", 1000.0, "scheduled")
+
+    # hset should have been called to store sensor run state
+    assert mock_r.hset.called
+    hset_call = mock_r.hset.call_args
+    key = hset_call.args[0]
+    assert key.startswith("sensor_run:prod:")
+    run_id = key.split(":")[-1]
+    stored = hset_call.kwargs["mapping"]
+    assert stored["job_id"] == "sensor-job-1"
+    assert stored["poll_interval_seconds"] == "15"
+    assert stored["timeout_seconds"] == "300"
+    assert stored["enqueue_reason"] == "scheduled"
+
+    # Should add run_id to active_sensors set
+    mock_r.sadd.assert_called_once_with("active_sensors:prod", run_id)
+
+    # Should push a run_start event
+    rpush_calls = mock_r.rpush.call_args_list
+    assert len(rpush_calls) == 1
+    event = json.loads(rpush_calls[0].args[1])
+    assert event["type"] == "run_start"
+    assert event["job_id"] == "sensor-job-1"
+    assert event["executor_type"] == "sensor"
+    assert event["run_id"] == run_id
