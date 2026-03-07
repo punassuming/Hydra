@@ -120,8 +120,18 @@ def _validate_job_definition(job: JobDefinition) -> JobValidationResult:
         command = getattr(executor, "command", "")
         if not command.strip():
             errors.append("external executor requires a command or binary path")
+    elif exec_type == "sensor":
+        target = getattr(executor, "target", "")
+        if not target.strip():
+            errors.append("sensor executor requires a non-empty target")
+        sensor_type = getattr(executor, "sensor_type", "")
+        if sensor_type == "sql":
+            connection_uri = getattr(executor, "connection_uri", None) or ""
+            credential_ref = getattr(executor, "credential_ref", None) or ""
+            if not connection_uri.strip() and not credential_ref.strip():
+                errors.append("sql sensor requires connection_uri or credential_ref")
     else:
-        errors.append("executor.type must be one of python|shell|batch|powershell|sql|external")
+        errors.append("executor.type must be one of python|shell|batch|powershell|sql|external|sensor")
 
     try:
         next_run_at = initialize_schedule(job.schedule, datetime.utcnow()).next_run_at

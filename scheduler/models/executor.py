@@ -77,6 +77,24 @@ class ExternalExecutor(ExecutorBase):
     command: str
 
 
+class SensorExecutor(ExecutorBase):
+    type: Literal["sensor"] = "sensor"
+    sensor_type: Literal["http", "sql"] = "http"
+    target: str
+    poll_interval_seconds: int = Field(default=30, ge=1)
+    timeout_seconds: int = Field(default=3600, ge=1)
+    # HTTP-specific
+    method: Literal["GET", "POST", "PUT", "DELETE", "PATCH"] = "GET"
+    headers: Dict[str, str] = Field(default_factory=dict)
+    body: Optional[str] = None
+    expected_status: List[int] = Field(default_factory=lambda: [200])
+    # SQL-specific
+    dialect: Literal["postgres", "mysql", "mssql", "oracle", "mongodb"] = "postgres"
+    connection_uri: Optional[str] = None
+    # Shared
+    credential_ref: Optional[str] = None
+
+
 ExecutorUnion = Union[
     PythonExecutor,
     ShellExecutor,
@@ -85,5 +103,6 @@ ExecutorUnion = Union[
     SqlExecutor,
     HttpExecutor,
     ExternalExecutor,
+    SensorExecutor,
 ]
 ExecutorConfig = Annotated[ExecutorUnion, Field(discriminator="type")]
