@@ -354,7 +354,7 @@ cd ui && npm run cypress:open   # interactive
 cd ui && npm run cypress:run    # headless
 ```
 
-See also: [`docs/docker-compose-workflows.md`](docs/docker-compose-workflows.md), [`docs/testing.md`](docs/testing.md)
+See also: [`docs/README.md`](docs/README.md), [`docs/development/docker-compose-workflows.md`](docs/development/docker-compose-workflows.md), [`docs/development/testing.md`](docs/development/testing.md)
 
 ---
 
