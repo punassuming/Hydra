@@ -25,16 +25,18 @@ Hydra Jobs is a distributed job runner designed for flexibility and scalability.
 
 ## Workflow & Architecture (Internal Details)
 
-- Scheduler (`scheduler/`) runs four background loops: `scheduling_loop` dispatches jobs from `job_queue:<domain>:pending` to `job_queue:<domain>:<worker_id>`, `failover_loop` requeues jobs from offline workers, `schedule_trigger_loop` advances cron/interval jobs, and `run_event_loop` consumes `run_events:<domain>` from Redis and persists run docs in Mongo.
+- Scheduler (`scheduler/`) runs four background loops: `scheduling_loop` dispatches jobs from `job_queue:<domain>:pending` to `job_queue:<domain>:<worker_id>`, `failover_loop` requeues jobs from offline workers and prunes stale offline worker records after a retention window, `schedule_trigger_loop` advances cron/interval jobs, and `run_event_loop` consumes `run_events:<domain>` from Redis and persists run docs in Mongo.
 - Terminal failures can trigger `on_failure_webhooks` and SMTP email alerts (`on_failure_email_to` + `on_failure_email_credential_ref`).
 - Scheduler admin API can provision domain-scoped Redis ACL worker access (`/admin/domains/{domain}/redis_acl/rotate`) and returns credentials for that domain; workers use `DOMAIN` as Redis username and `REDIS_PASSWORD` as secret.
 - Worker Redis ACL username is the domain name itself (legacy hashed usernames are cleaned up on rotation/delete).
+- Redis ACL credentials are persisted in Mongo domain metadata when created/rotated, and scheduler startup re-applies stored ACL users/passwords to Redis so worker auth survives Redis restarts/recreates without forced credential rotation.
 - Scheduler worker APIs include:
   - `GET /workers/` with runtime + 30m metrics summary (memory/process/load), running jobs/users, plus clear `connectivity_status` and `dispatch_status`.
   - `GET /workers/{worker_id}/metrics` for time-series points.
   - `GET /workers/{worker_id}/timeline` for per-worker execution spans (for Gantt/timeline UI).
   - `GET /workers/{worker_id}/operations` for operational timeline events (start/restart/dispatch/run lifecycle/state changes/failover).
   - `POST /workers/{worker_id}/state` with JSON body `{ "state": "online|draining|offline" }` (`disabled` accepted as legacy alias).
+  - `POST /workers/{worker_id}/detach` to remove an offline worker record from Redis registry (optionally `?force=true`), requeuing worker-queue envelopes back to domain pending queue.
 - Scheduler domain self-service APIs (domain token or admin token scoped by `domain`):
   - `GET /domain/settings`, `PUT /domain/settings`
   - `POST /domain/token/rotate`
@@ -174,6 +176,7 @@ Located in `scripts/`:
 - `MONGO_URL` — MongoDB connection URL
 - `MONGO_DB` — MongoDB database name
 - `SCHEDULER_HEARTBEAT_TTL` — Heartbeat TTL for workers
+- `SCHEDULER_WORKER_OFFLINE_PRUNE_SECONDS` — Age threshold to prune stale offline worker registry records (default `1800`; minimum effectively `3 * SCHEDULER_HEARTBEAT_TTL`)
 - `CORS_ALLOW_ORIGINS` — CORS allowed origins
 - `ADMIN_TOKEN` — Admin authentication token
 - `ADMIN_DOMAIN` — Admin domain name

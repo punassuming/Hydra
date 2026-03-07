@@ -12,7 +12,7 @@ services:
       - .env
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - WORKER_ID=${WORKER_ID:-worker-dev}
+      - WORKER_ID=${WORKER_ID:-}
       - DOMAIN=${DOMAIN:-prod}
       - API_TOKEN=${API_TOKEN:-}
       - WORKER_TAGS=${WORKER_TAGS:-dev}

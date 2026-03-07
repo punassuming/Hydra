@@ -1,6 +1,6 @@
-import { Select, Space, Typography, Button, Modal, Input, Tag } from "antd";
+import { Select, Space, Typography, Button, Input, Tag } from "antd";
 import { useEffect, useState } from "react";
-import { setActiveDomain as storeDomain, setTokenForDomain, forgetToken, getAdminToken, hasTokenForDomain } from "../api/client";
+import { setActiveDomain as storeDomain, setTokenForDomain, getAdminToken, hasTokenForDomain } from "../api/client";
 import { useDomains } from "../hooks/useDomains";
 import { useActiveDomain } from "../context/ActiveDomainContext";
 import { useTheme } from "../theme";
@@ -9,7 +9,7 @@ export function DomainSelector({ onChange }: { onChange?: (domain: string) => vo
   const domainOptions = useDomains();
   const { domain: current, setDomain } = useActiveDomain();
   const { colors } = useTheme();
-  const [switchModal, setSwitchModal] = useState<{ open: boolean; domain?: string; token?: string }>({ open: false });
+  const [newDomainInput, setNewDomainInput] = useState("");
   const adminToken = getAdminToken();
   const availableDomains = domainOptions.map((o) => o.domain);
 
@@ -23,20 +23,18 @@ export function DomainSelector({ onChange }: { onChange?: (domain: string) => vo
     onChange?.(fallback);
   }, [availableDomains, current, onChange, setDomain]);
 
-  // Non-admin users see only their current domain label, no switching
-  if (!adminToken) {
-    return (
-      <Space>
-        <Space direction="vertical" size={0}>
-          <Typography.Text style={{ color: colors.textSecondary }}>Active Domain</Typography.Text>
-          <Tag color={hasTokenForDomain(current) ? "green" : "volcano"} style={{ marginTop: 2 }}>
-            {hasTokenForDomain(current) ? "Token saved" : "No token"}
-          </Tag>
-        </Space>
-        <Typography.Text strong>{current}</Typography.Text>
-      </Space>
-    );
-  }
+  const selectOptions = Array.from(new Set([current, ...domainOptions.map((o) => o.domain)])).map((domain) => {
+    const hit = domainOptions.find((o) => o.domain === domain);
+    return { label: hit?.label || domain, value: domain };
+  });
+
+  const applyDomain = (domain: string) => {
+    const trimmed = domain.trim();
+    if (!trimmed) return;
+    storeDomain(trimmed);
+    setDomain(trimmed);
+    onChange?.(trimmed);
+  };
 
   return (
     <Space>
@@ -49,17 +47,37 @@ export function DomainSelector({ onChange }: { onChange?: (domain: string) => vo
       <Select
         size="small"
         value={current}
-        options={domainOptions.map((o) => ({ label: o.label, value: o.domain }))}
-        onChange={(domain) => {
-          storeDomain(domain);
-          setDomain(domain);
-          onChange?.(domain);
-        }}
-        style={{ minWidth: 140 }}
+        options={selectOptions}
+        onChange={applyDomain}
+        style={{ minWidth: 160 }}
+        showSearch
+        dropdownRender={(menu) => (
+          <>
+            {menu}
+            <Space style={{ padding: 8, width: "100%" }}>
+              <Input
+                size="small"
+                value={newDomainInput}
+                placeholder="Enter new domain"
+                onChange={(e) => setNewDomainInput(e.target.value)}
+                onPressEnter={() => {
+                  applyDomain(newDomainInput);
+                  setNewDomainInput("");
+                }}
+              />
+              <Button
+                size="small"
+                onClick={() => {
+                  applyDomain(newDomainInput);
+                  setNewDomainInput("");
+                }}
+              >
+                Use
+              </Button>
+            </Space>
+          </>
+        )}
       />
-      <Button size="small" onClick={() => setSwitchModal({ open: true, domain: current })}>
-        Switch Token
-      </Button>
       {adminToken && (
         <Button
           size="small"
@@ -72,32 +90,6 @@ export function DomainSelector({ onChange }: { onChange?: (domain: string) => vo
           Use Admin
         </Button>
       )}
-      <Typography.Link
-        onClick={() => {
-          forgetToken(current);
-        }}
-      >
-        Forget Token
-      </Typography.Link>
-      <Modal
-        open={switchModal.open}
-        title={`Set token for ${switchModal.domain}`}
-        onCancel={() => setSwitchModal({ open: false })}
-        onOk={() => {
-          if (switchModal.domain && switchModal.token) {
-            setTokenForDomain(switchModal.domain, switchModal.token);
-            storeDomain(switchModal.domain);
-            setDomain(switchModal.domain);
-            setSwitchModal({ open: false });
-          }
-        }}
-      >
-        <Input.Password
-          placeholder="Enter domain token"
-          value={switchModal.token}
-          onChange={(e) => setSwitchModal((prev) => ({ ...prev, token: e.target.value }))}
-        />
-      </Modal>
     </Space>
   );
 }

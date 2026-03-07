@@ -3,6 +3,7 @@ import time
 import json
 import os
 from typing import Callable
+from redis.exceptions import RedisError
 
 from ..redis_client import get_redis
 from ..config import get_domain
@@ -67,37 +68,41 @@ def start_heartbeat(worker_id: str, get_active_jobs: Callable[[], list], interva
     def _beat():
         last_sample_at = 0.0
         while True:
-            now = time.time()
-            r.zadd(f"worker_heartbeats:{domain}", {worker_id: now})
-            # Keep current_running in sync with active job count for UI accuracy
-            active_jobs = get_active_jobs()
-            r.hset(f"workers:{domain}:{worker_id}", mapping={"current_running": len(active_jobs)})
-            # Update heartbeat for running jobs
-            for job_id in active_jobs:
-                r.hset(f"job_running:{domain}:{job_id}", mapping={"worker_id": worker_id, "heartbeat": now})
+            try:
+                now = time.time()
+                r.zadd(f"worker_heartbeats:{domain}", {worker_id: now})
+                # Keep current_running in sync with active job count for UI accuracy
+                active_jobs = get_active_jobs()
+                r.hset(f"workers:{domain}:{worker_id}", mapping={"current_running": len(active_jobs)})
+                # Update heartbeat for running jobs
+                for job_id in active_jobs:
+                    r.hset(f"job_running:{domain}:{job_id}", mapping={"worker_id": worker_id, "heartbeat": now})
 
-            if now - last_sample_at >= sample_interval:
-                try:
-                    metrics = _collect_process_metrics()
-                    metrics["ts"] = now
-                    history_key = f"worker_metrics:{domain}:{worker_id}:history"
-                    r.rpush(history_key, json.dumps(metrics))
-                    r.ltrim(history_key, -max_samples, -1)
-                    r.expire(history_key, max(window_seconds * 2, 3600))
-                    r.hset(
-                        f"workers:{domain}:{worker_id}",
-                        mapping={
-                            "process_count": metrics["process_count"],
-                            "memory_rss_mb": metrics["memory_rss_mb"],
-                            "load_1m": metrics["load_1m"] if metrics.get("load_1m") is not None else "",
-                            "load_5m": metrics["load_5m"] if metrics.get("load_5m") is not None else "",
-                            "metrics_ts": now,
-                        },
-                    )
-                except Exception:
-                    # Metrics collection should never take down the heartbeat loop.
-                    pass
-                last_sample_at = now
+                if now - last_sample_at >= sample_interval:
+                    try:
+                        metrics = _collect_process_metrics()
+                        metrics["ts"] = now
+                        history_key = f"worker_metrics:{domain}:{worker_id}:history"
+                        r.rpush(history_key, json.dumps(metrics))
+                        r.ltrim(history_key, -max_samples, -1)
+                        r.expire(history_key, max(window_seconds * 2, 3600))
+                        r.hset(
+                            f"workers:{domain}:{worker_id}",
+                            mapping={
+                                "process_count": metrics["process_count"],
+                                "memory_rss_mb": metrics["memory_rss_mb"],
+                                "load_1m": metrics["load_1m"] if metrics.get("load_1m") is not None else "",
+                                "load_5m": metrics["load_5m"] if metrics.get("load_5m") is not None else "",
+                                "metrics_ts": now,
+                            },
+                        )
+                    except Exception:
+                        # Metrics collection should never take down the heartbeat loop.
+                        pass
+                    last_sample_at = now
+            except RedisError as exc:
+                # Transient Redis/network errors must not terminate heartbeat.
+                print(f"Heartbeat Redis error for {worker_id}: {exc}")
             time.sleep(interval)
 
     t = threading.Thread(target=_beat, daemon=True)

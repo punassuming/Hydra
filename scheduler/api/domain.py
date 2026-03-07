@@ -72,5 +72,13 @@ def rotate_domain_redis_acl(request: Request) -> Dict:
     if not doc:
         raise HTTPException(status_code=404, detail="domain not found")
     redis_acl = ensure_worker_acl_user(domain)
+    db.domains.update_one(
+        {"domain": domain},
+        {
+            "$set": {
+                "worker_redis_acl_user": redis_acl.get("username"),
+                "worker_redis_acl_password": redis_acl.get("password"),
+            }
+        },
+    )
     return {"ok": True, "domain": domain, "worker_redis_acl": redis_acl}
-

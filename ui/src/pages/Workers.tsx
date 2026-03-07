@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Card, Col, Progress, Row, Space, Statistic, Table, Tag, Tooltip, Typography, Button } from "antd";
-import { fetchWorkers } from "../api/jobs";
+import { Card, Col, Progress, Row, Space, Statistic, Table, Tag, Tooltip, Typography, Button, Popconfirm, message } from "antd";
+import { detachWorker, fetchWorkers } from "../api/jobs";
 import { WorkerInfo } from "../types";
 import { apiClient } from "../api/client";
 import { useNavigate } from "react-router-dom";
@@ -26,6 +26,20 @@ export function WorkersPage() {
     mutationFn: ({ workerId, state }: { workerId: string; state: string }) =>
       apiClient.post(`/workers/${workerId}/state`, { state }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["workers", domain] }),
+  });
+  const detachMutation = useMutation({
+    mutationFn: ({ workerId, force }: { workerId: string; force?: boolean }) => detachWorker(workerId, Boolean(force)),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["workers", domain] });
+      if (result.requeued_jobs) {
+        message.success(`Detached ${result.worker_id} and requeued ${result.requeued_jobs} job(s).`);
+      } else {
+        message.success(`Detached ${result.worker_id}.`);
+      }
+    },
+    onError: (err: unknown) => {
+      message.error(err instanceof Error ? err.message : "Failed to detach worker");
+    },
   });
 
   const columns = [
@@ -169,6 +183,27 @@ export function WorkersPage() {
           <Button size="small" onClick={(e) => { e.stopPropagation(); setStateMutation.mutate({ workerId: record.worker_id, state: "offline" }); }}>
             Offline
           </Button>
+          {(record.connectivity_status ?? record.status) === "offline" && (
+            <Popconfirm
+              title="Detach offline worker?"
+              description="Removes this offline worker record from scheduler view."
+              okText="Detach"
+              onConfirm={(e) => {
+                e?.stopPropagation();
+                detachMutation.mutate({ workerId: record.worker_id });
+              }}
+              onCancel={(e) => e?.stopPropagation()}
+            >
+              <Button
+                size="small"
+                danger
+                loading={detachMutation.isPending}
+                onClick={(e) => e.stopPropagation()}
+              >
+                Detach
+              </Button>
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -228,11 +263,13 @@ export function WorkersPage() {
       </Row>
       <Card>
         <Table
+          className="table-nowrap"
           dataSource={workers.map((w) => ({ ...w, key: w.worker_id }))}
           columns={columns}
           loading={isLoading}
           pagination={{ pageSize: 10 }}
           size="small"
+          scroll={{ x: "max-content" }}
           onRow={(record) => ({
             onClick: () => navigate(`/workers/${record.worker_id}`),
             style: { cursor: "pointer" },

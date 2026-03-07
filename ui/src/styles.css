@@ -139,6 +139,10 @@ body .ant-segmented-thumb {
   border-radius: 10px;
 }
 
+.table-nowrap .ant-table-cell {
+  white-space: nowrap;
+}
+
 /* Responsive styles */
 @media (max-width: 768px) {
   .hide-on-mobile {

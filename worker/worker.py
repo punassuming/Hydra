@@ -4,6 +4,7 @@ import time
 import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from redis.exceptions import RedisError
 
 from .redis_client import get_redis
 from .config import (
@@ -342,7 +343,13 @@ def worker_main():
 
     print(f"Worker {worker_id} starting with max_concurrency={max_concurrency}")
     while True:
-        item = r.blpop([f"job_queue:{domain}:{worker_id}"], timeout=2)
+        try:
+            item = r.blpop([f"job_queue:{domain}:{worker_id}"], timeout=2)
+        except RedisError as exc:
+            # Keep worker alive across transient Redis disconnects/restarts.
+            print(f"Worker {worker_id} Redis error while polling queue: {exc}")
+            time.sleep(1)
+            continue
         if not item:
             continue
         _, raw_payload = item

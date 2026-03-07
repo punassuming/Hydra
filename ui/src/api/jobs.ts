@@ -59,6 +59,11 @@ export const fetchWorkerTimeline = (workerId: string, minutes = 180) =>
   apiClient.get<WorkerTimelineData>(`/workers/${workerId}/timeline?minutes=${minutes}`);
 export const fetchWorkerOperations = (workerId: string, limit = 250) =>
   apiClient.get<WorkerOperationsData>(`/workers/${workerId}/operations?limit=${limit}`);
+export const detachWorker = (workerId: string, force = false) =>
+  apiClient.post<{ ok: boolean; domain: string; worker_id: string; detached: boolean; requeued_jobs: number }>(
+    `/workers/${workerId}/detach${force ? "?force=true" : ""}`,
+    {},
+  );
 export const fetchJobRuns = (jobId: string) => apiClient.get<JobRun[]>(`/jobs/${jobId}/runs`);
 export const fetchJobOverview = () => apiClient.get<JobOverview[]>("/overview/jobs");
 export const fetchJobStatistics = () => apiClient.get<JobStatistics>("/overview/statistics");

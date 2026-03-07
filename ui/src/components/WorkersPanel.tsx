@@ -64,11 +64,13 @@ export function WorkersPanel() {
   return (
     <Card title="Workers" bordered={false}>
       <Table
+        className="table-nowrap"
         size="small"
         loading={isLoading}
         dataSource={(data ?? []).map((worker) => ({ ...worker, key: worker.worker_id }))}
         columns={columns}
         pagination={false}
+        scroll={{ x: "max-content" }}
       />
     </Card>
   );

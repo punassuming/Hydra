@@ -141,6 +141,43 @@ def _resolve_worker_key(request: Request, worker_id: str) -> tuple[str, str, dic
     raise HTTPException(status_code=404, detail="worker not found")
 
 
+def _truthy_flag(raw: str | None) -> bool:
+    return (raw or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _requeue_worker_queue(r, domain: str, worker_id: str) -> int:
+    """
+    Move any queued envelopes from worker-specific queue back to domain pending queue.
+    """
+    queue_key = f"job_queue:{domain}:{worker_id}"
+    items = r.lrange(queue_key, 0, -1) or []
+    if not items:
+        return 0
+    requeued = 0
+    for raw in items:
+        try:
+            envelope = json.loads(raw)
+        except Exception:
+            continue
+        job_id = envelope.get("job_id")
+        priority = float((envelope.get("job") or {}).get("priority", 5))
+        if not job_id:
+            continue
+        r.zadd(f"job_queue:{domain}:pending", {job_id: priority})
+        r.hset(
+            f"job_enqueue_meta:{domain}:{job_id}",
+            mapping={
+                "enqueued_ts": envelope.get("enqueued_ts") or time.time(),
+                "reason": "worker_detached",
+                "retry_attempt": envelope.get("retry_attempt", 0),
+            },
+        )
+        r.expire(f"job_enqueue_meta:{domain}:{job_id}", 24 * 3600)
+        requeued += 1
+    r.delete(queue_key)
+    return requeued
+
+
 @router.get("/workers/", response_model=List[WorkerInfo])
 def list_workers(request: Request):
     r = get_redis()
@@ -352,6 +389,49 @@ def set_worker_state(worker_id: str, payload: WorkerStatePayload, request: Reque
         details={"from": previous_state, "to": state},
     )
     return {"ok": True, "state": state}
+
+
+@router.post("/workers/{worker_id}/detach")
+def detach_worker(worker_id: str, request: Request):
+    """
+    Remove an offline worker record from Redis.
+    By default requires worker connectivity to be offline and no running jobs.
+    Optional query param force=true bypasses those checks.
+    """
+    r = get_redis()
+    ttl = max(2, int(os.getenv("SCHEDULER_HEARTBEAT_TTL", "10")))
+    force = _truthy_flag(request.query_params.get("force"))
+    domain, key, _data = _resolve_worker_key(request, worker_id)
+
+    hb = r.zscore(f"worker_heartbeats:{domain}", worker_id)
+    connectivity_status, _hb_age = _heartbeat_connectivity(hb, ttl)
+    if connectivity_status != "offline" and not force:
+        raise HTTPException(status_code=409, detail="worker is online; only offline workers can be detached")
+
+    running_jobs = list(r.smembers(f"worker_running_set:{domain}:{worker_id}") or [])
+    if running_jobs and not force:
+        raise HTTPException(
+            status_code=409,
+            detail=f"worker has {len(running_jobs)} running job(s); failover or force detach required",
+        )
+
+    requeued_count = _requeue_worker_queue(r, domain, worker_id)
+    r.zrem(f"worker_heartbeats:{domain}", worker_id)
+    r.delete(
+        key,
+        f"worker_running_set:{domain}:{worker_id}",
+        f"worker_metrics:{domain}:{worker_id}:history",
+        f"worker_ops:{domain}:{worker_id}",
+    )
+
+    append_worker_op(
+        domain=domain,
+        worker_id=worker_id,
+        op_type="detach",
+        message="Worker detached from scheduler registry",
+        details={"force": force, "requeued_jobs": requeued_count},
+    )
+    return {"ok": True, "domain": domain, "worker_id": worker_id, "detached": True, "requeued_jobs": requeued_count}
 
 
 @router.get("/workers/{worker_id}/operations")

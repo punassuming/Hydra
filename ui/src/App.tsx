@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Layout, Typography, Space, Segmented, Button } from "antd";
+import { Layout, Typography, Space, Segmented, Switch } from "antd";
 import { Routes, Route, useLocation, useNavigate } from "react-router-dom";
 import { ConfigProvider, theme } from "antd";
 import { MoonOutlined, SunOutlined } from "@ant-design/icons";
@@ -10,8 +10,9 @@ import { WorkersPage } from "./pages/Workers";
 import { AdminPage } from "./pages/Admin";
 import { HydraLogo } from "./components/HydraLogo";
 import { HeaderSettings } from "./components/HeaderSettings";
+import { DomainSelector } from "./components/DomainSelector";
 import { AuthPrompt } from "./components/AuthPrompt";
-import { AUTH_REQUIRED_EVENT, hasAnyToken, getAdminToken } from "./api/client";
+import { AUTH_REQUIRED_EVENT, hasAnyToken } from "./api/client";
 import { WorkerDetailPage } from "./pages/WorkerDetail";
 import { ActiveDomainProvider, useActiveDomain } from "./context/ActiveDomainContext";
 import { ThemeProvider, useTheme } from "./theme";
@@ -60,20 +61,17 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
     window.addEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
     return () => window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
   }, []);
-  const isAdmin = Boolean(getAdminToken());
   const navItems = useMemo(
     () => {
       const items = [
         { value: "operate", label: "Operate", path: "/" },
         { value: "observe", label: "Observe", path: "/observe" },
         { value: "workers", label: "Workers", path: "/workers" },
+        { value: "admin", label: "Admin", path: "/admin" },
       ];
-      if (isAdmin) {
-        items.push({ value: "admin", label: "Admin", path: "/admin" });
-      }
       return items;
     },
-    [isAdmin],
+    [],
   );
   const currentNav = useMemo(() => {
     if (location.pathname.startsWith("/observe")) return "observe";
@@ -102,10 +100,6 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
     <ConfigProvider
       theme={{
         algorithm: darkMode ? theme.darkAlgorithm : theme.defaultAlgorithm,
-        token: {
-          colorPrimary: colors.primary,
-          borderRadius: 6,
-        },
       }}
     >
       <Layout>
@@ -161,7 +155,8 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
                 </Typography.Text>
               </Space>
             </Space>
-            <Space align="center" size="large" style={{ flexWrap: "wrap" }}>
+            <Space align="center" size={12} style={{ flexWrap: "wrap", justifyContent: "flex-end" }}>
+              <DomainSelector />
               <Segmented
                 className="header-nav-tabs"
                 value={currentNav}
@@ -173,18 +168,14 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
                   }
                 }}
               />
-              <Space size={12} align="center" wrap>
-                <Typography.Text style={{ color: darkMode ? "#cbd5e1" : "#1e293b", fontSize: 13 }}>
-                  Domain: <strong>{activeDomain}</strong>
-                </Typography.Text>
-                <Button
-                  icon={darkMode ? <SunOutlined /> : <MoonOutlined />}
-                  onClick={() => setDarkMode(!darkMode)}
-                >
-                  {darkMode ? "Light" : "Dark"}
-                </Button>
-                <HeaderSettings />
-              </Space>
+              <Switch
+                checked={darkMode}
+                onChange={(checked) => setDarkMode(checked)}
+                checkedChildren={<MoonOutlined />}
+                unCheckedChildren={<SunOutlined />}
+                aria-label="Theme mode"
+              />
+              <HeaderSettings />
             </Space>
           </div>
         </Header>

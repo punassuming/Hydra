@@ -19,6 +19,7 @@ from .scheduler import scheduling_loop, failover_loop, schedule_trigger_loop, ti
 from .run_events import run_event_loop
 from .utils.logging import setup_logging
 from .utils.auth import enforce_api_key
+from .utils.redis_acl import ensure_worker_acl_user
 from .redis_client import get_redis
 from .mongo_client import get_db
 
@@ -66,6 +67,17 @@ def _ensure_domains_seeded():
         r.sadd("hydra:domains", domain)
         r.set(f"token_hash:{domain}", token_hash)
         r.set(f"token_hash:{token_hash}:domain", domain)
+        acl_password = doc.get("worker_redis_acl_password")
+        if acl_password:
+            try:
+                ensure_worker_acl_user(domain, password=acl_password)
+            except Exception as exc:
+                log.warning("Failed to restore Redis ACL user for domain %s: %s", domain, exc)
+        else:
+            log.warning(
+                "Domain %s has no persisted worker Redis ACL password; rotate ACL once to enable restart-safe recovery.",
+                domain,
+            )
     # Optional seeding (used by dev compose)
     if db.domains.count_documents({}) == 0:
         token = secrets.token_hex(24)

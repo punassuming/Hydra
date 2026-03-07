@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Divider, Drawer, Input, Select, Space, Tag, Typography, message } from "antd";
+import { Button, Divider, Drawer, Input, Select, Space, Tag, Typography, Tooltip, message } from "antd";
 import { SettingOutlined } from "@ant-design/icons";
 import { forgetToken, getAdminToken, hasTokenForDomain, setTokenForDomain, setTokenPreference } from "../api/client";
 import { useDomains } from "../hooks/useDomains";
@@ -40,9 +40,9 @@ export function HeaderSettings() {
 
   return (
     <>
-      <Button icon={<SettingOutlined />} onClick={() => setOpen(true)}>
-        Settings
-      </Button>
+      <Tooltip title="Settings">
+        <Button size="small" shape="circle" icon={<SettingOutlined />} onClick={() => setOpen(true)} />
+      </Tooltip>
       <Drawer
         title="Workspace Settings"
         open={open}

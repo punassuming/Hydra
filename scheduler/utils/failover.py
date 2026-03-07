@@ -1,6 +1,7 @@
+import os
 import time
 from datetime import datetime
-from typing import List
+from typing import List, Tuple
 
 from ..redis_client import get_redis
 from ..mongo_client import get_db
@@ -12,7 +13,7 @@ from ..event_bus import event_bus
 log = setup_logging("scheduler.failover")
 
 
-def find_offline_workers(ttl_seconds: int) -> List[str]:
+def find_offline_workers(ttl_seconds: int) -> List[Tuple[str, float]]:
     r = get_redis()
     now = time.time()
     offline = []
@@ -21,8 +22,9 @@ def find_offline_workers(ttl_seconds: int) -> List[str]:
         domain = key.split(":")[1]
         heartbeats = r.zrange(key, 0, -1, withscores=True)
         for worker_id, ts in heartbeats:
-            if now - ts > ttl_seconds:
-                offline.append(f"{domain}:{worker_id}")
+            age = now - ts
+            if age > ttl_seconds:
+                offline.append((f"{domain}:{worker_id}", age))
     return offline
 
 
@@ -77,7 +79,42 @@ def requeue_jobs_for_worker(domain_and_worker: str):
     )
 
 
+def prune_stale_worker(domain_and_worker: str, age_seconds: float):
+    r = get_redis()
+    domain, worker_id = domain_and_worker.split(":", 1)
+    # Keep operational timeline key for debugging; remove active registry/state keys.
+    r.delete(
+        f"workers:{domain}:{worker_id}",
+        f"worker_running_set:{domain}:{worker_id}",
+        f"worker_metrics:{domain}:{worker_id}:history",
+    )
+    r.zrem(f"worker_heartbeats:{domain}", worker_id)
+    append_worker_op(
+        domain=domain,
+        worker_id=worker_id,
+        op_type="prune",
+        message="Pruned stale offline worker record",
+        details={"offline_age_seconds": round(age_seconds, 1)},
+    )
+    log.info("Pruned stale worker record %s (offline %.1fs)", domain_and_worker, age_seconds)
+
+
 def failover_once(ttl_seconds: int):
+    r = get_redis()
+    prune_after = max(ttl_seconds * 3, int(os.getenv("SCHEDULER_WORKER_OFFLINE_PRUNE_SECONDS", "1800")))
+    handled_ttl = max(10, ttl_seconds * 2)
     offline_workers = find_offline_workers(ttl_seconds)
-    for wid in offline_workers:
-        requeue_jobs_for_worker(wid)
+    for wid, age in offline_workers:
+        domain, worker_id = wid.split(":", 1)
+        running_key = f"worker_running_set:{domain}:{worker_id}"
+        worker_queue_key = f"job_queue:{domain}:{worker_id}"
+
+        if age >= prune_after and not (r.smembers(running_key) or []) and int(r.llen(worker_queue_key) or 0) == 0:
+            prune_stale_worker(wid, age)
+            continue
+
+        marker_key = f"worker_failover_handled:{domain}:{worker_id}"
+        # Avoid repeatedly re-processing the same offline worker every loop.
+        first_seen = bool(r.set(marker_key, str(int(time.time())), nx=True, ex=handled_ttl))
+        if first_seen:
+            requeue_jobs_for_worker(wid)
