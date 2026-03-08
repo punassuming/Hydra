@@ -58,7 +58,22 @@ def _collect_process_metrics() -> dict:
     }
 
 
-def start_heartbeat(worker_id: str, get_active_jobs: Callable[[], list], interval: float = 2.0) -> threading.Thread:
+def _ensure_worker_registration(r, domain: str, worker_id: str, refresh_registration: Callable[[], None] | None = None) -> bool:
+    if refresh_registration is None:
+        return False
+    worker_key = f"workers:{domain}:{worker_id}"
+    if r.hexists(worker_key, "domain_token_hash"):
+        return False
+    refresh_registration()
+    return True
+
+
+def start_heartbeat(
+    worker_id: str,
+    get_active_jobs: Callable[[], list],
+    interval: float = 2.0,
+    refresh_registration: Callable[[], None] | None = None,
+) -> threading.Thread:
     r = get_redis()
     domain = get_domain()
     sample_interval = max(float(os.getenv("WORKER_METRICS_SAMPLE_SECONDS", "15")), interval)
@@ -71,6 +86,7 @@ def start_heartbeat(worker_id: str, get_active_jobs: Callable[[], list], interva
             try:
                 now = time.time()
                 r.zadd(f"worker_heartbeats:{domain}", {worker_id: now})
+                _ensure_worker_registration(r, domain, worker_id, refresh_registration)
                 # Keep current_running in sync with active job count for UI accuracy
                 active_jobs = get_active_jobs()
                 r.hset(f"workers:{domain}:{worker_id}", mapping={"current_running": len(active_jobs)})

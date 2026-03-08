@@ -112,7 +112,11 @@ def worker_main():
         with active_jobs_lock:
             return list(active_jobs)
 
-    start_heartbeat(worker_id, get_active_jobs)
+    start_heartbeat(
+        worker_id,
+        get_active_jobs,
+        refresh_registration=lambda: register_worker(worker_id, max_concurrency),
+    )
 
     executor = ThreadPoolExecutor(max_workers=max_concurrency)
 

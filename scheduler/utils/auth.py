@@ -39,7 +39,7 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def _get_domain_token_hash(domain: str) -> str | None:
+def get_domain_token_hash(domain: str) -> str | None:
     r = get_redis()
     cached = r.get(f"token_hash:{domain}")
     if cached:
@@ -56,7 +56,7 @@ def _get_domain_token_hash(domain: str) -> str | None:
 
 
 def _validate_domain_token(domain: str, token: str) -> str | None:
-    expected_hash = _get_domain_token_hash(domain)
+    expected_hash = get_domain_token_hash(domain)
     if not expected_hash:
         return None
     provided_hash = _hash_token(token)

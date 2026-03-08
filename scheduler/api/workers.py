@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from ..redis_client import get_redis
 from ..mongo_client import get_db
 from ..models.worker_info import WorkerInfo
+from ..utils.auth import get_domain_token_hash
 from ..utils.worker_ops import append_worker_op
 
 router = APIRouter()
@@ -198,7 +199,7 @@ def list_workers(request: Request):
             parts = key.split(":")
             wid = parts[2] if len(parts) > 2 else parts[-1]
             data = r.hgetall(key)
-            expected_hash = r.get(f"token_hash:{dom}")
+            expected_hash = get_domain_token_hash(dom)
             worker_hash = data.get("domain_token_hash")
             if expected_hash and worker_hash and worker_hash != expected_hash:
                 continue

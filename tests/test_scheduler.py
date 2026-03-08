@@ -133,6 +133,30 @@ def test_build_dependency_graph_includes_missing_dependency_node():
     assert edges == [{"source": "missing-id", "target": "b"}]
 
 
+def test_list_online_workers_recovers_expected_token_hash_from_persistence():
+    import time
+    from unittest.mock import MagicMock, patch
+    from scheduler.scheduler import list_online_workers
+
+    mock_r = MagicMock()
+    mock_r.scan_iter.return_value = ["workers:prod:worker-a"]
+    mock_r.hgetall.return_value = {
+        "os": "linux",
+        "max_concurrency": "2",
+        "current_running": "0",
+        "state": "online",
+        "domain_token_hash": "persisted-hash",
+    }
+    mock_r.zscore.return_value = time.time()
+
+    with patch("scheduler.scheduler.get_redis", return_value=mock_r), patch(
+        "scheduler.scheduler.get_domain_token_hash", return_value="persisted-hash"
+    ):
+        workers = list_online_workers(ttl_seconds=10, domain="prod")
+
+    assert [w["worker_id"] for w in workers] == ["worker-a"]
+
+
 def test_source_config_model_fields():
     from scheduler.models.job_definition import SourceConfig
     # Basic git source

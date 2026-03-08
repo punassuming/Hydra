@@ -4,6 +4,7 @@ from worker.executor import execute_job
 from worker.utils.completion import evaluate_completion, evaluate_file_criteria
 from worker.utils.python_env import prepare_python_command
 from worker.utils.completion import _contains_all, _contains_none
+from worker.utils.heartbeat import _ensure_worker_registration
 
 
 def test_os_exec_echo():
@@ -181,6 +182,33 @@ def test_git_token_injection_ssh_passthrough():
     result = _inject_token_into_url(url, "mytoken")
     # SSH URLs should pass through unchanged
     assert result == url
+
+
+def test_ensure_worker_registration_refreshes_missing_registry():
+    from unittest.mock import MagicMock
+
+    mock_r = MagicMock()
+    mock_r.hexists.return_value = False
+    refresh = MagicMock()
+
+    refreshed = _ensure_worker_registration(mock_r, "prod", "worker-1", refresh)
+
+    assert refreshed is True
+    mock_r.hexists.assert_called_once_with("workers:prod:worker-1", "domain_token_hash")
+    refresh.assert_called_once_with()
+
+
+def test_ensure_worker_registration_skips_when_registry_is_present():
+    from unittest.mock import MagicMock
+
+    mock_r = MagicMock()
+    mock_r.hexists.return_value = True
+    refresh = MagicMock()
+
+    refreshed = _ensure_worker_registration(mock_r, "prod", "worker-1", refresh)
+
+    assert refreshed is False
+    refresh.assert_not_called()
 
 
 def test_git_token_injection_empty_token():
