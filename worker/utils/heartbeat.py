@@ -64,7 +64,11 @@ def _ensure_worker_registration(r, domain: str, worker_id: str, refresh_registra
     worker_key = f"workers:{domain}:{worker_id}"
     if r.hexists(worker_key, "domain_token_hash"):
         return False
-    refresh_registration()
+    try:
+        refresh_registration()
+    except Exception as exc:
+        print(f"Worker registration refresh failed for {worker_id}: {exc}")
+        return False
     return True
 
 

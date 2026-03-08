@@ -211,6 +211,25 @@ def test_ensure_worker_registration_skips_when_registry_is_present():
     refresh.assert_not_called()
 
 
+def test_ensure_worker_registration_handles_refresh_failure():
+    from unittest.mock import MagicMock
+
+    mock_r = MagicMock()
+    mock_r.hexists.return_value = False
+
+    def fail_refresh():
+        raise RuntimeError("boom")
+
+    refreshed = _ensure_worker_registration(
+        mock_r,
+        "prod",
+        "worker-1",
+        fail_refresh,
+    )
+
+    assert refreshed is False
+
+
 def test_git_token_injection_empty_token():
     from worker.utils.git import _inject_token_into_url
     url = "https://github.com/user/repo.git"
