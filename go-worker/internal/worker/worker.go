@@ -135,6 +135,18 @@ func register(ctx context.Context, cfg *config.Config, rdb *redis.Client) error 
 	return nil
 }
 
+func ensureRegistration(ctx context.Context, cfg *config.Config, rdb *redis.Client) error {
+	key := fmt.Sprintf("workers:%s:%s", cfg.Domain, cfg.WorkerID)
+	exists, err := rdb.HExists(ctx, key, "domain_token_hash").Result()
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	return register(ctx, cfg, rdb)
+}
+
 // ---------------------------------------------------------------------------
 // Heartbeat
 // ---------------------------------------------------------------------------
@@ -171,6 +183,9 @@ func (w *workerState) heartbeatLoop(ctx context.Context) {
 			Score:  now,
 			Member: w.cfg.WorkerID,
 		})
+		if err := ensureRegistration(ctx, w.cfg, w.rdb); err != nil {
+			fmt.Printf("Worker registration refresh failed for %s: %v\n", w.cfg.WorkerID, err)
+		}
 
 		// Sync current_running + update job_running heartbeats.
 		activeJobs := w.getActiveJobIDs()

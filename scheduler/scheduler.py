@@ -12,6 +12,7 @@ from pymongo import ReturnDocument
 
 from .redis_client import get_redis
 from .mongo_client import get_db
+from .utils.auth import get_domain_token_hash
 from .utils.affinity import passes_affinity
 from .utils.selectors import select_best_worker
 from .utils.failover import failover_once
@@ -160,7 +161,7 @@ def list_online_workers(ttl_seconds: int, domain: str, respect_capacity: bool = 
         online = (now - hb) <= ttl_seconds
         if not online:
             continue
-        expected_hash = r.get(f"token_hash:{domain}")
+        expected_hash = get_domain_token_hash(domain)
         worker_hash = data.get("domain_token_hash")
         if expected_hash and worker_hash and worker_hash != expected_hash:
             continue
