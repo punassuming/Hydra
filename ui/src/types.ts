@@ -199,6 +199,24 @@ export interface JobStatistics {
   available_tags: string[];
 }
 
+export interface QueueJobItem {
+  job_id: string;
+  name: string;
+  user?: string;
+  domain?: string;
+  priority?: number;
+  schedule_mode?: string;
+  next_run_at?: string | null;
+  queue_score?: number;
+  enqueued_ts?: string | null;
+  reason?: string;
+}
+
+export interface QueueOverview {
+  pending: QueueJobItem[];
+  upcoming: QueueJobItem[];
+}
+
 export interface JobGridTaskInstance {
   run_id: string;
   status?: string;

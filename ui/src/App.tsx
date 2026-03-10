@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Layout, Typography, Space, Segmented, Switch } from "antd";
+import { Layout, Typography, Space, Segmented, Switch, Button } from "antd";
 import { Routes, Route, useLocation, useNavigate } from "react-router-dom";
 import { ConfigProvider, theme } from "antd";
 import { MoonOutlined, SunOutlined } from "@ant-design/icons";
@@ -10,7 +10,6 @@ import { WorkersPage } from "./pages/Workers";
 import { AdminPage } from "./pages/Admin";
 import { HydraLogo } from "./components/HydraLogo";
 import { HeaderSettings } from "./components/HeaderSettings";
-import { DomainSelector } from "./components/DomainSelector";
 import { AuthPrompt } from "./components/AuthPrompt";
 import { AUTH_REQUIRED_EVENT, hasAnyToken } from "./api/client";
 import { WorkerDetailPage } from "./pages/WorkerDetail";
@@ -67,7 +66,6 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
         { value: "operate", label: "Operate", path: "/" },
         { value: "observe", label: "Observe", path: "/observe" },
         { value: "workers", label: "Workers", path: "/workers" },
-        { value: "admin", label: "Admin", path: "/admin" },
       ];
       return items;
     },
@@ -76,7 +74,7 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
   const currentNav = useMemo(() => {
     if (location.pathname.startsWith("/observe")) return "observe";
     if (location.pathname.startsWith("/workers")) return "workers";
-    if (location.pathname.startsWith("/admin")) return "admin";
+    if (location.pathname.startsWith("/admin")) return undefined;
     return "operate";
   }, [location.pathname]);
 
@@ -156,7 +154,6 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
               </Space>
             </Space>
             <Space align="center" size={12} style={{ flexWrap: "wrap", justifyContent: "flex-end" }}>
-              <DomainSelector />
               <Segmented
                 className="header-nav-tabs"
                 value={currentNav}
@@ -175,6 +172,12 @@ function AppShell({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
                 unCheckedChildren={<SunOutlined />}
                 aria-label="Theme mode"
               />
+              <Button
+                type={location.pathname.startsWith("/admin") ? "primary" : "default"}
+                onClick={() => navigate("/admin")}
+              >
+                Admin
+              </Button>
               <HeaderSettings />
             </Space>
           </div>

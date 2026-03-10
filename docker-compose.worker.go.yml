@@ -1,0 +1,18 @@
+services:
+  go-worker:
+    build:
+      context: ./go-worker
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - WORKER_ID=${WORKER_ID:-}
+      - DOMAIN=${DOMAIN:-prod}
+      - API_TOKEN=${API_TOKEN}
+      - WORKER_TAGS=${WORKER_TAGS:-go}
+      - MAX_CONCURRENCY=${MAX_CONCURRENCY:-2}
+      - DEPLOYMENT_TYPE=${DEPLOYMENT_TYPE:-docker}
+      - WORKER_METRICS_SAMPLE_SECONDS=${WORKER_METRICS_SAMPLE_SECONDS:-15}
+      - WORKER_METRICS_WINDOW_SECONDS=${WORKER_METRICS_WINDOW_SECONDS:-1800}

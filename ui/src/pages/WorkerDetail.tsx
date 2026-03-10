@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Card, Col, Descriptions, Row, Space, Statistic, Tag, Typography, Button, List, Select, Tooltip } from "antd";
+import { Card, Col, Descriptions, Row, Space, Statistic, Tag, Typography, Button, List, Slider, Tooltip } from "antd";
 import { useNavigate, useParams } from "react-router-dom";
 import { fetchWorkerMetrics, fetchWorkerOperations, fetchWorkers, fetchWorkerTimeline } from "../api/jobs";
 import { apiClient } from "../api/client";
@@ -210,6 +210,17 @@ export function WorkerDetailPage() {
     refetchInterval: 5000,
   });
   const metricPoints = useMemo(() => metricsQuery.data?.points ?? [], [metricsQuery.data?.points]);
+  const windowMarks = useMemo(
+    () => ({
+      10: "10m",
+      30: "30m",
+      60: "60m",
+      120: "120m",
+      180: "180m",
+      360: "360m",
+    }),
+    [],
+  );
 
   useEffect(() => {
     localStorage.setItem("hydra_worker_window", String(windowMinutes));
@@ -302,19 +313,17 @@ export function WorkerDetailPage() {
       <Card
         title="Runtime Metrics Trend"
         extra={
-          <Select
-            value={windowMinutes}
-            onChange={setWindowMinutes}
-            options={[
-              { label: "10m", value: 10 },
-              { label: "30m", value: 30 },
-              { label: "60m", value: 60 },
-              { label: "120m", value: 120 },
-              { label: "180m", value: 180 },
-              { label: "360m", value: 360 },
-            ]}
-            style={{ width: 120 }}
-          />
+          <div style={{ width: 220 }}>
+            <Slider
+              min={10}
+              max={360}
+              step={null}
+              marks={windowMarks}
+              value={windowMinutes}
+              onChange={(value) => setWindowMinutes(value as number)}
+              tooltip={{ formatter: (value) => `${value}m` }}
+            />
+          </div>
         }
       >
         <Typography.Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
@@ -336,19 +345,17 @@ export function WorkerDetailPage() {
       <Card
         title="Worker Execution Timeline"
         extra={
-          <Select
-            value={windowMinutes}
-            onChange={setWindowMinutes}
-            options={[
-              { label: "10m", value: 10 },
-              { label: "30m", value: 30 },
-              { label: "60m", value: 60 },
-              { label: "120m", value: 120 },
-              { label: "180m", value: 180 },
-              { label: "360m", value: 360 },
-            ]}
-            style={{ width: 120 }}
-          />
+          <div style={{ width: 220 }}>
+            <Slider
+              min={10}
+              max={360}
+              step={null}
+              marks={windowMarks}
+              value={windowMinutes}
+              onChange={(value) => setWindowMinutes(value as number)}
+              tooltip={{ formatter: (value) => `${value}m` }}
+            />
+          </div>
         }
       >
         <WorkerTimeline data={timelineQuery.data} />

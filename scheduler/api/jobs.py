@@ -523,6 +523,111 @@ def _serialize_ts(value):
     return value
 
 
+def _coerce_datetime(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            # Support both "...Z" and offset-less iso timestamps.
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
+@router.get("/overview/queue")
+def queue_overview(request: Request):
+    db = get_db()
+    r = get_redis()
+    domain = getattr(request.state, "domain", "prod")
+    is_admin = getattr(request.state, "is_admin", False)
+    force_domain = request.query_params.get("domain")
+    def _parse_limit(name: str, default: int = 100) -> int:
+        raw = request.query_params.get(name)
+        if raw is None:
+            return default
+        try:
+            return max(1, min(int(raw), 500))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"{name} must be an integer") from exc
+
+    pending_limit = _parse_limit("pending_limit")
+    upcoming_limit = _parse_limit("upcoming_limit")
+
+    if is_admin and force_domain:
+        query = {"domain": force_domain}
+    elif is_admin:
+        query = {}
+    else:
+        query = {"domain": domain}
+
+    job_docs = list(db.job_definitions.find(query))
+    jobs_by_id = {doc["_id"]: doc for doc in job_docs}
+
+    pending: List[Dict[str, Any]] = []
+    pending_domains: List[str]
+    if is_admin and not force_domain:
+        pending_domains = sorted({doc.get("domain", "prod") for doc in job_docs} | set(r.smembers("hydra:domains") or []))
+    elif is_admin and force_domain:
+        pending_domains = [force_domain]
+    else:
+        pending_domains = [domain]
+
+    for pending_domain in pending_domains:
+        items = r.zrange(f"job_queue:{pending_domain}:pending", 0, pending_limit - 1, withscores=True) or []
+        for job_id, score in items:
+            job = jobs_by_id.get(job_id)
+            if not job and not is_admin:
+                continue
+            meta = r.hgetall(f"job_enqueue_meta:{pending_domain}:{job_id}") or {}
+            enqueued_ts = meta.get("enqueued_ts")
+            pending.append(
+                {
+                    "job_id": job_id,
+                    "name": (job or {}).get("name", job_id),
+                    "user": (job or {}).get("user", ""),
+                    "domain": (job or {}).get("domain", pending_domain),
+                    "priority": (job or {}).get("priority"),
+                    "schedule_mode": ((job or {}).get("schedule") or {}).get("mode", "immediate"),
+                    "next_run_at": _serialize_ts(((job or {}).get("schedule") or {}).get("next_run_at")),
+                    "queue_score": score,
+                    "enqueued_ts": _serialize_ts(datetime.utcfromtimestamp(float(enqueued_ts))) if enqueued_ts else None,
+                    "reason": meta.get("reason"),
+                }
+            )
+
+    # Keep "closest to dispatch" first (lowest score), then oldest enqueue.
+    pending.sort(key=lambda item: (item.get("queue_score", 0), item.get("enqueued_ts") or ""))
+    pending = pending[:pending_limit]
+
+    upcoming: List[Dict[str, Any]] = []
+    for job in job_docs:
+        schedule = job.get("schedule") or {}
+        if not schedule.get("enabled", True):
+            continue
+        if schedule.get("mode") not in {"cron", "interval"}:
+            continue
+        next_run = schedule.get("next_run_at")
+        next_run_dt = _coerce_datetime(next_run)
+        if not next_run_dt:
+            continue
+        upcoming.append(
+            {
+                "job_id": job["_id"],
+                "name": job.get("name", job["_id"]),
+                "user": job.get("user", ""),
+                "domain": job.get("domain", "prod"),
+                "priority": job.get("priority"),
+                "schedule_mode": schedule.get("mode", "immediate"),
+                "next_run_at": _serialize_ts(next_run_dt),
+            }
+        )
+    upcoming.sort(key=lambda item: item.get("next_run_at") or "")
+    upcoming = upcoming[:upcoming_limit]
+
+    return {"pending": pending, "upcoming": upcoming}
+
+
 def _build_dependency_graph(
     jobs_by_id: Dict[str, Dict[str, Any]],
     root_job_id: str,

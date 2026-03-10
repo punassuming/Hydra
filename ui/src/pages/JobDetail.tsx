@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, Space, Typography, Tabs, Button, Tag, Descriptions, message, Modal, Input, Form } from "antd";
+import { JobForm } from "../components/JobForm";
 import { JobRuns } from "../components/JobRuns";
 import { JobGridView } from "../components/JobGridView";
 import { JobGanttView } from "../components/JobGanttView";
 import { JobGraphView } from "../components/JobGraphView";
-import { fetchJob, fetchJobRuns, runJobNow, killRun, backfillJob } from "../api/jobs";
+import { JobPayload, ValidationResult, fetchJob, fetchJobRuns, runJobNow, killRun, backfillJob, updateJob, validateJob } from "../api/jobs";
 import { useActiveDomain } from "../context/ActiveDomainContext";
 
 export function JobDetailPage() {
@@ -21,6 +22,9 @@ export function JobDetailPage() {
   const [backfillModalVisible, setBackfillModalVisible] = useState(false);
   const [backfillStartDate, setBackfillStartDate] = useState("");
   const [backfillEndDate, setBackfillEndDate] = useState("");
+  const [editModalVisible, setEditModalVisible] = useState(false);
+  const [editStatusMessage, setEditStatusMessage] = useState<string>();
+  const [validating, setValidating] = useState(false);
 
   const jobQuery = useQuery({
     queryKey: ["job", domain, jobId],
@@ -34,6 +38,7 @@ export function JobDetailPage() {
     enabled: Boolean(jobId),
     refetchInterval: 5000,
   });
+  const job = jobQuery.data;
 
   const parseParams = (text: string): Record<string, string> => {
     const result: Record<string, string> = {};
@@ -54,6 +59,73 @@ export function JobDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["job-graph", domain, jobId] });
     },
   });
+
+  const updateMutation = useMutation({
+    mutationFn: (payload: JobPayload) => updateJob(jobId!, payload),
+    onSuccess: () => {
+      messageApi.success("Job updated");
+      queryClient.invalidateQueries({ queryKey: ["jobs", domain] });
+      queryClient.invalidateQueries({ queryKey: ["job", domain, jobId] });
+      setEditModalVisible(false);
+      setEditStatusMessage(undefined);
+    },
+    onError: (err: Error) => {
+      setEditStatusMessage(err.message);
+      messageApi.error(err.message);
+    },
+  });
+
+  const toJobPayload = (source: any): JobPayload => ({
+    name: source.name,
+    user: source.user || "default",
+    priority: source.priority ?? 5,
+    affinity: source.affinity,
+    executor: source.executor,
+    retries: source.retries ?? 0,
+    timeout: source.timeout ?? 30,
+    bypass_concurrency: source.bypass_concurrency ?? false,
+    source: source.source ?? null,
+    schedule: source.schedule,
+    completion: source.completion,
+    tags: source.tags ?? [],
+    depends_on: source.depends_on ?? [],
+    max_retries: source.max_retries ?? 0,
+    retry_delay_seconds: source.retry_delay_seconds ?? 0,
+    on_failure_webhooks: source.on_failure_webhooks ?? [],
+    on_failure_email_to: source.on_failure_email_to ?? [],
+    on_failure_email_credential_ref: source.on_failure_email_credential_ref ?? "",
+    sla_max_duration_seconds: source.sla_max_duration_seconds ?? null,
+  });
+
+  const toggleActiveMutation = useMutation({
+    mutationFn: (enabled: boolean) => updateJob(jobId!, { ...toJobPayload(job), schedule: { ...job!.schedule, enabled } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["jobs", domain] });
+      queryClient.invalidateQueries({ queryKey: ["job", domain, jobId] });
+      messageApi.success("Job schedule state updated");
+    },
+    onError: (err: Error) => messageApi.error(err.message),
+  });
+
+  const handleValidate = async (payload: JobPayload): Promise<ValidationResult | undefined> => {
+    setValidating(true);
+    setEditStatusMessage("Validating…");
+    try {
+      const result = await validateJob(payload);
+      if (result.valid) {
+        const next = result.next_run_at ? ` – next run ${new Date(result.next_run_at).toLocaleString()}` : "";
+        setEditStatusMessage(`Validation passed${next}`);
+      } else {
+        setEditStatusMessage(result.errors.join(", "));
+      }
+      return result;
+    } catch (err) {
+      setEditStatusMessage((err as Error).message);
+      return undefined;
+    } finally {
+      setValidating(false);
+    }
+  };
 
   const killMutation = useMutation({
     mutationFn: (runId: string) => killRun(runId),
@@ -100,8 +172,6 @@ export function JobDetailPage() {
     backfillMutation.mutate({ id: job!._id, start: backfillStartDate, end: backfillEndDate });
     setBackfillModalVisible(false);
   };
-
-  const job = jobQuery.data;
 
   useEffect(() => {
     localStorage.setItem("hydra_job_detail_tab", activeTab);
@@ -221,6 +291,20 @@ export function JobDetailPage() {
             <Tag color={job.schedule.enabled ? "green" : "default"}>{job.schedule.mode === "immediate" ? "manual" : job.schedule.mode}</Tag>
           </Space>
           <Space>
+            <Button
+              onClick={() => {
+                setEditStatusMessage(undefined);
+                setEditModalVisible(true);
+              }}
+            >
+              Edit Job
+            </Button>
+            <Button
+              onClick={() => toggleActiveMutation.mutate(!job.schedule.enabled)}
+              loading={toggleActiveMutation.isPending}
+            >
+              {job.schedule.enabled ? "Deactivate" : "Activate"}
+            </Button>
             <Button onClick={handleRunNow} loading={manualRun.isPending}>Run Now</Button>
             <Button onClick={handleBackfill} loading={backfillMutation.isPending}>Backfill</Button>
             <Button onClick={() => navigate("/")}>Back to Jobs</Button>
@@ -228,6 +312,36 @@ export function JobDetailPage() {
         </Space>
       </Card>
       <Tabs items={tabItems} activeKey={activeTab} onChange={setActiveTab} />
+      <Modal
+        title={`Edit Job – ${job.name}`}
+        open={editModalVisible}
+        onCancel={() => {
+          setEditModalVisible(false);
+          setEditStatusMessage(undefined);
+        }}
+        footer={null}
+        width={980}
+        destroyOnClose
+      >
+        <JobForm
+          selectedJob={job}
+          onSubmit={(payload) => {
+            setEditStatusMessage("Saving job…");
+            updateMutation.mutate(payload);
+          }}
+          onValidate={handleValidate}
+          onManualRun={handleRunNow}
+          onAdhocRun={() => messageApi.info("Adhoc runs are available from the New Job flow on Home.")}
+          submitting={updateMutation.isPending}
+          validating={validating}
+          statusMessage={editStatusMessage}
+          onReset={() => {}}
+          onCancel={() => {
+            setEditModalVisible(false);
+            setEditStatusMessage(undefined);
+          }}
+        />
+      </Modal>
       <Modal
         open={paramsModalVisible}
         title="Run with Parameters"

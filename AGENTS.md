@@ -36,6 +36,7 @@ Hydra Jobs is a distributed job runner designed for flexibility and scalability.
   - `GET /workers/{worker_id}/timeline` for per-worker execution spans (for Gantt/timeline UI).
   - `GET /workers/{worker_id}/operations` for operational timeline events (start/restart/dispatch/run lifecycle/state changes/failover).
   - `POST /workers/{worker_id}/state` with JSON body `{ "state": "online|draining|offline" }` (`disabled` accepted as legacy alias).
+  - `GET /overview/queue` for domain-scoped `pending` queue rows and `upcoming` scheduled jobs (supports `pending_limit`/`upcoming_limit`).
   - `POST /workers/{worker_id}/detach` to remove an offline worker record from Redis registry (optionally `?force=true`), requeuing worker-queue envelopes back to domain pending queue.
 - Scheduler domain self-service APIs (domain token or admin token scoped by `domain`):
   - `GET /domain/settings`, `PUT /domain/settings`
@@ -54,9 +55,11 @@ Hydra Jobs is a distributed job runner designed for flexibility and scalability.
 - UI auth/UX notes:
   - Login gate: when unauthenticated, only the auth modal/screen is shown.
   - Auth modal clearly separates `Domain Token` and `Admin Token` sign-in modes; admin mode no longer asks for a domain in the same step.
-  - Header has tabbed nav (including Admin), persistent dark/light toggle, and a Settings drawer for domain/token/admin actions.
+  - Header has tabbed nav for Operate/Observe/Workers, a separate Admin button beside settings, persistent dark/light toggle, and a Settings drawer for domain/token/admin actions.
   - Admin page is also used for domain self-service when logged in with a domain token (domain settings + credentials for active domain).
   - Worker detail page includes metrics trend plotting + concurrency-lane timeline/Gantt + operational event timeline.
+  - Workers main page includes an aggregated Execution/Business timeline section (all workers) for recent run spans and operational events.
+  - Job detail page supports in-place editing of existing jobs and quick activate/deactivate (schedule enabled) actions.
   - Logs view supports search/highlight, parsed/raw modes, expansion, and copy actions.
   - AI log helper supports multiple analysis modes (failure fix, summary, error extraction, retry tuning, custom question).
   - Theme and key panel states persist via localStorage.
@@ -122,6 +125,15 @@ docker compose -f docker-compose.worker.yml up --build
 # Scale workers (WORKER_ID defaults to auto-generated unique IDs)
 API_TOKEN=<domain_token> DOMAIN=prod \
 docker compose -f docker-compose.worker.yml up --build --scale worker=2
+
+# Go worker variant
+API_TOKEN=<domain_token> DOMAIN=prod \
+REDIS_URL=redis://localhost:6379/0 REDIS_PASSWORD=<acl_password> \
+docker compose -f docker-compose.worker.go.yml up --build
+
+# Scale Go workers
+API_TOKEN=<domain_token> DOMAIN=prod \
+docker compose -f docker-compose.worker.go.yml up --build --scale go-worker=2
 ```
 
 ### Development Servers
@@ -139,6 +151,7 @@ Located in `scripts/`:
 *   `test.sh`: Runs Python backend tests.
 *   `test-all.sh`: Runs all tests.
 *   `worker-up.sh`: Helper to start a worker.
+*   `docker-compose.worker.go.yml`: Compose file to run the Go worker.
 *   `build-images.sh`: Builds Docker images.
 *   `create-domain.sh`: Creates a new domain via the API.
 *   `provision-redis-acl.sh`: Rotates/provisions domain worker Redis ACL credentials via admin API.

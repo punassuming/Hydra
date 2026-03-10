@@ -11,6 +11,7 @@ export function HeaderSettings() {
   const [open, setOpen] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
   const [adminTokenInput, setAdminTokenInput] = useState("");
+  const [newDomainInput, setNewDomainInput] = useState("");
   const adminToken = getAdminToken();
   const availableDomains = domainOptions.map((o) => o.domain);
   const effectiveDomainOptions = useMemo(
@@ -38,6 +39,18 @@ export function HeaderSettings() {
     setTokenInput("");
   };
 
+  const applyDomain = (domain: string) => {
+    const next = domain.trim();
+    if (!next) return;
+    setDomain(next);
+    setNewDomainInput("");
+  };
+
+  const domainSelectOptions = Array.from(new Set([currentDomain, ...effectiveDomainOptions.map((o) => o.domain)])).map((domain) => {
+    const hit = effectiveDomainOptions.find((o) => o.domain === domain);
+    return { label: hit?.label || domain, value: domain };
+  });
+
   return (
     <>
       <Tooltip title="Settings">
@@ -57,15 +70,29 @@ export function HeaderSettings() {
           </Typography.Text>
           <Space direction="vertical" size={4}>
             <Typography.Text strong>Active domain</Typography.Text>
-            {adminToken ? (
-              <Select
-                value={currentDomain}
-                options={effectiveDomainOptions.map((o) => ({ label: o.label, value: o.domain }))}
-                onChange={(domain) => setDomain(domain)}
-              />
-            ) : (
-              <Typography.Text>{currentDomain}</Typography.Text>
-            )}
+            <Select
+              value={currentDomain}
+              options={domainSelectOptions}
+              onChange={applyDomain}
+              showSearch
+              dropdownRender={(menu) => (
+                <>
+                  {menu}
+                  <Space style={{ padding: 8, width: "100%" }}>
+                    <Input
+                      size="small"
+                      value={newDomainInput}
+                      placeholder="Enter new domain"
+                      onChange={(e) => setNewDomainInput(e.target.value)}
+                      onPressEnter={() => applyDomain(newDomainInput)}
+                    />
+                    <Button size="small" onClick={() => applyDomain(newDomainInput)}>
+                      Use
+                    </Button>
+                  </Space>
+                </>
+              )}
+            />
             <Tag color={hasTokenForDomain(currentDomain) ? "green" : "volcano"}>
               {hasTokenForDomain(currentDomain) ? "Domain token saved" : "No domain token saved"}
             </Tag>

@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Row, Col, Card, Typography, Space, Button, Modal, Divider } from "antd";
+import { Row, Col, Card, Typography, Space, Button, Modal, Divider, Table } from "antd";
 import { JobForm } from "../components/JobForm";
 import { JobList } from "../components/JobList";
 import { JobRuns } from "../components/JobRuns";
 import { EventsFeed } from "../components/EventsFeed";
 import { useSchedulerEvents } from "../hooks/useEvents";
-import { createJob, fetchJobs, JobPayload, runAdhocJob, runJobNow, updateJob, validateJob } from "../api/jobs";
+import { createJob, fetchJobs, fetchQueueOverview, JobPayload, runAdhocJob, runJobNow, updateJob, validateJob } from "../api/jobs";
 import { useActiveDomain } from "../context/ActiveDomainContext";
 import { JobsDashboard } from "../components/JobsDashboard";
+import { QueueJobItem } from "../types";
 
 export function HomePage() {
   const queryClient = useQueryClient();
@@ -26,6 +27,11 @@ export function HomePage() {
   const jobsQuery = useQuery({
     queryKey: ["jobs", domain],
     queryFn: () => fetchJobs(),
+    refetchInterval: 5000,
+  });
+  const queueOverviewQuery = useQuery({
+    queryKey: ["queue-overview", domain],
+    queryFn: fetchQueueOverview,
     refetchInterval: 5000,
   });
 
@@ -147,6 +153,62 @@ export function HomePage() {
       </Card>
 
       <JobsDashboard />
+
+      <Row gutter={[16, 16]}>
+        <Col xs={24} xl={12}>
+          <Card title="Upcoming Jobs">
+            <Table<QueueJobItem>
+              rowKey={(row) => `${row.domain ?? "prod"}:${row.job_id}`}
+              loading={queueOverviewQuery.isLoading}
+              dataSource={queueOverviewQuery.data?.upcoming ?? []}
+              size="small"
+              pagination={{ pageSize: 6 }}
+              scroll={{ x: 720 }}
+              columns={[
+                { title: "Job", dataIndex: "name", key: "name" },
+                { title: "Domain", dataIndex: "domain", key: "domain", render: (value?: string) => value ?? "prod" },
+                { title: "User", dataIndex: "user", key: "user" },
+                { title: "Mode", dataIndex: "schedule_mode", key: "schedule_mode" },
+                {
+                  title: "Next Run",
+                  dataIndex: "next_run_at",
+                  key: "next_run_at",
+                  render: (value?: string | null) => (value ? new Date(value).toLocaleString() : "-"),
+                },
+              ]}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} xl={12}>
+          <Card title="Queued Jobs">
+            <Table<QueueJobItem>
+              rowKey={(row) => `${row.domain ?? "prod"}:${row.job_id}:${row.enqueued_ts ?? "na"}`}
+              loading={queueOverviewQuery.isLoading}
+              dataSource={queueOverviewQuery.data?.pending ?? []}
+              size="small"
+              pagination={{ pageSize: 6 }}
+              scroll={{ x: 720 }}
+              columns={[
+                { title: "Job", dataIndex: "name", key: "name" },
+                { title: "Domain", dataIndex: "domain", key: "domain", render: (value?: string) => value ?? "prod" },
+                {
+                  title: "Priority",
+                  dataIndex: "priority",
+                  key: "priority",
+                  render: (value?: number) => (typeof value === "number" ? value : "-"),
+                },
+                {
+                  title: "Queued At",
+                  dataIndex: "enqueued_ts",
+                  key: "enqueued_ts",
+                  render: (value?: string | null) => (value ? new Date(value).toLocaleString() : "-"),
+                },
+                { title: "Reason", dataIndex: "reason", key: "reason", render: (value?: string) => value ?? "-" },
+              ]}
+            />
+          </Card>
+        </Col>
+      </Row>
 
       <Card id="job-list" title="Jobs">
         <JobList

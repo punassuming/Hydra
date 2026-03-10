@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Card, Space, Typography, Button, Progress, Table, Tag, Modal, Tabs } from "antd";
-import { fetchJobOverview, runJobNow, fetchHistory } from "../api/jobs";
-import { JobRun } from "../types";
+import { Card, Space, Typography, Button, Progress, Table, Tag, Modal, Tabs, Input, Select } from "antd";
+import { fetchJobOverview, runJobNow, fetchHistory, fetchJobs, fetchWorkers } from "../api/jobs";
+import { JobRun, WorkerInfo } from "../types";
 import { useActiveDomain } from "../context/ActiveDomainContext";
 import { StatusBadge } from "../components/StatusBadge";
 import { LogViewer } from "../components/LogViewer";
@@ -18,6 +18,8 @@ function StatusTab() {
   const { domain } = useActiveDomain();
   const { colors } = useTheme();
   const overviewQuery = useQuery({ queryKey: ["job-overview", domain], queryFn: fetchJobOverview, refetchInterval: 5000 });
+  const [searchText, setSearchText] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
 
   const runNow = useMutation({
     mutationFn: (jobId: string) => runJobNow(jobId),
@@ -75,15 +77,62 @@ function StatusTab() {
     );
   };
 
+  const overview = overviewQuery.data ?? [];
+  const statusOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const job of overview) {
+      set.add((job.last_run?.status ?? "never").toLowerCase());
+    }
+    return Array.from(set).sort();
+  }, [overview]);
+
+  const filteredOverview = useMemo(() => {
+    const needle = searchText.trim().toLowerCase();
+    return overview.filter((job) => {
+      const lastStatus = (job.last_run?.status ?? "never").toLowerCase();
+      if (statusFilter !== "all" && lastStatus !== statusFilter) {
+        return false;
+      }
+      if (!needle) {
+        return true;
+      }
+      const haystack = [job.name, job.job_id, job.schedule_mode, ...(job.tags ?? [])]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(needle);
+    });
+  }, [overview, searchText, statusFilter]);
+
   return (
     <Card
       title="Job Status"
-      extra={<Typography.Text type="secondary">Run health across all jobs. Use Operate to manage job definitions.</Typography.Text>}
+      extra={
+        <Space wrap>
+          <Typography.Text type="secondary">Run health across all jobs.</Typography.Text>
+          <Input.Search
+            allowClear
+            placeholder="Filter by job, id, tag"
+            style={{ width: 240 }}
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+          />
+          <Select
+            value={statusFilter}
+            style={{ width: 150 }}
+            onChange={setStatusFilter}
+            options={[
+              { label: "All statuses", value: "all" },
+              ...statusOptions.map((status) => ({ label: status, value: status })),
+            ]}
+          />
+        </Space>
+      }
     >
       <Table
         rowKey="job_id"
         loading={overviewQuery.isLoading}
-        dataSource={overviewQuery.data ?? []}
+        dataSource={filteredOverview}
         pagination={{ pageSize: 10 }}
         columns={[
           {
@@ -158,15 +207,90 @@ function StatusTab() {
 
 function HistoryTab() {
   const { domain } = useActiveDomain();
+  const [searchText, setSearchText] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
   const { data, isLoading } = useQuery({
     queryKey: ["history", domain],
     queryFn: fetchHistory,
     refetchInterval: 5000,
   });
+  const jobsQuery = useQuery({
+    queryKey: ["jobs", domain],
+    queryFn: () => fetchJobs(),
+    refetchInterval: 10000,
+  });
+  const workersQuery = useQuery({
+    queryKey: ["workers", domain],
+    queryFn: fetchWorkers,
+    refetchInterval: 5000,
+  });
   const [logModal, setLogModal] = useState<{ visible: boolean; run?: JobRun }>({ visible: false });
 
+  const jobsById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const job of jobsQuery.data ?? []) {
+      map.set(job._id, job.name);
+    }
+    return map;
+  }, [jobsQuery.data]);
+
+  const workersById = useMemo(() => {
+    const map = new Map<string, WorkerInfo>();
+    for (const worker of workersQuery.data ?? []) {
+      map.set(worker.worker_id, worker);
+    }
+    return map;
+  }, [workersQuery.data]);
+
+  const statusOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const run of data ?? []) {
+      set.add((run.status ?? "unknown").toLowerCase());
+    }
+    return Array.from(set).sort();
+  }, [data]);
+
+  const filteredRuns = useMemo(() => {
+    const needle = searchText.trim().toLowerCase();
+    return (data ?? []).filter((run) => {
+      const status = (run.status ?? "unknown").toLowerCase();
+      if (statusFilter !== "all" && status !== statusFilter) {
+        return false;
+      }
+      if (!needle) {
+        return true;
+      }
+      const jobName = jobsById.get(run.job_id) ?? "";
+      const worker = run.worker_id ? workersById.get(run.worker_id) : undefined;
+      const haystack = [
+        run.job_id,
+        jobName,
+        run.user,
+        run.domain,
+        run.worker_id,
+        worker?.hostname,
+        worker?.ip,
+        run.status,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(needle);
+    });
+  }, [data, jobsById, searchText, statusFilter, workersById]);
+
   const columns = [
-    { title: "Job", dataIndex: "job_id", key: "job_id" },
+    {
+      title: "Job",
+      dataIndex: "job_id",
+      key: "job_id",
+      render: (jobId: string) => (
+        <Space direction="vertical" size={0}>
+          <Typography.Text strong>{jobsById.get(jobId) ?? jobId}</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{jobId}</Typography.Text>
+        </Space>
+      ),
+    },
     { title: "User", dataIndex: "user", key: "user" },
     { title: "Domain", dataIndex: "domain", key: "domain", render: (value?: string) => value ?? "prod" },
     {
@@ -175,7 +299,29 @@ function HistoryTab() {
       key: "status",
       render: (status: string) => <StatusBadge status={status} />,
     },
-    { title: "Worker", dataIndex: "worker_id", key: "worker_id" },
+    {
+      title: "Worker",
+      dataIndex: "worker_id",
+      key: "worker_id",
+      render: (workerId?: string) => {
+        if (!workerId) return "-";
+        const worker = workersById.get(workerId);
+        if (!worker) {
+          return <Typography.Text>{workerId}</Typography.Text>;
+        }
+        return (
+          <Space direction="vertical" size={0}>
+            <Typography.Text strong>{worker.worker_id}</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {worker.hostname ?? "unknown-host"} · {worker.ip ?? "n/a"}
+            </Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {worker.connectivity_status ?? worker.status} / {worker.dispatch_status ?? worker.state ?? "unknown"}
+            </Typography.Text>
+          </Space>
+        );
+      },
+    },
     {
       title: "Started",
       dataIndex: "start_ts",
@@ -197,13 +343,33 @@ function HistoryTab() {
     },
   ];
 
-  const runs = (data ?? []).map((run) => ({ ...run, key: run._id }));
+  const runs = filteredRuns.map((run) => ({ ...run, key: run._id }));
 
   return (
     <>
       <Card
         title="Run History"
-        extra={<Typography.Text type="secondary">All runs across jobs. Click logs to inspect output.</Typography.Text>}
+        extra={
+          <Space wrap>
+            <Typography.Text type="secondary">All runs across jobs.</Typography.Text>
+            <Input.Search
+              allowClear
+              placeholder="Filter by job, worker, user"
+              style={{ width: 240 }}
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+            />
+            <Select
+              value={statusFilter}
+              style={{ width: 150 }}
+              onChange={setStatusFilter}
+              options={[
+                { label: "All statuses", value: "all" },
+                ...statusOptions.map((status) => ({ label: status, value: status })),
+              ]}
+            />
+          </Space>
+        }
       >
         <Table dataSource={runs} columns={columns} loading={isLoading} size="small" pagination={{ pageSize: 10 }} />
       </Card>
