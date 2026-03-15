@@ -112,6 +112,33 @@ Both Python and Go workers support the following executor types:
 | `batch` | Run Windows batch scripts | Windows only |
 | `sql` | Execute SQL queries | Supports postgres, mysql, mssql, oracle, mongodb; uses credential_ref for secrets |
 | `http` | Make HTTP requests | REST triggers, webhooks, health checks; supports credential_ref for auth |
+| `sensor` | Poll until a condition is met | HTTP or SQL sensor; runs on worker, not scheduler |
+
+### Sensor Executor
+
+Sensor jobs (`executor.type == "sensor"`) are dispatched and executed entirely on workers — the scheduler does **not** perform any external polling. This preserves the architectural boundary that the scheduler orchestrates and persists while workers execute.
+
+A sensor worker thread polls a target at `poll_interval_seconds` intervals until either:
+- The condition is met (HTTP: expected status received; SQL: query returns ≥1 row) → `run_end` status `success`
+- `timeout_seconds` elapses → `run_end` status `failed`
+
+Credentials (`credential_ref`) for sensor jobs are resolved by the scheduler at dispatch time and injected into the job envelope, exactly as for other executor types. Workers have no MongoDB access.
+
+### Worker Capability Detection
+
+Workers advertise only executor types that pass a concrete preflight check at startup:
+
+| Capability | Preflight check |
+|---|---|
+| `shell` / `external` | At least one shell binary executes `exit 0` successfully |
+| `python` | `HYDRA_PYTHON_PATH` or `python3`/`python` found and executable |
+| `powershell` | `pwsh` or `powershell` executes `exit 0` successfully |
+| `batch` | Windows OS detected |
+| `sql` | Python present **and** `sqlalchemy` or `pymongo` importable |
+| `http` | Always available (stdlib `urllib`) |
+| `sensor` | Always available (HTTP sensor uses stdlib; SQL sensor requires same as `sql`) |
+
+This fail-closed approach prevents dispatch of jobs to workers that lack the necessary runtime, rather than discovering the gap at execution time.
 
 ### Cross-Platform User Control
 
@@ -126,3 +153,28 @@ Workers maintain a persistent cache directory for source workspaces. Cache entri
 - **Configurable TTL metadata** (`WORKER_WORKSPACE_CACHE_TTL`) based on the last recorded cache-use timestamp
 - **Git fast-update** (fetch + checkout instead of full clone on cache hit)
 - **Cache modes** per job: `auto` (default), `always`, `never`
+
+## Startup and Cold-Start Timing
+
+Hydra instruments key stages of job execution so operators can observe where time is spent. The following timing fields are included in `run_end` events (and therefore persisted to MongoDB `job_runs`):
+
+| Field | Description |
+|---|---|
+| `queue_latency_ms` | Time from job enqueue to worker thread start (dispatch latency) |
+| `total_run_ms` | Wall-clock time from `run_start` to `run_end` |
+| `source_fetch_ms` | Time spent fetching/updating the workspace (git clone, copy, rsync). `null` if no source is configured. |
+| `env_prep_ms` | Time to prepare the Python execution environment (venv create, uv install). `null` for non-Python executors. |
+
+Additionally, each worker records `startup_duration_ms` in its registration metadata (`workers:<domain>:<worker_id>`) and in the `start`/`restart` worker operation event. This measures the time from process start to first successful registration, capturing the cost of capability detection, dependency checks, and Redis connection setup.
+
+### Querying timing data
+
+Timing fields are available on `GET /history/` run records. To identify cold-start bottlenecks:
+
+```bash
+# Summarise source_fetch_ms for a specific job (using mongosh or any MongoDB client)
+db.job_runs.aggregate([
+  { $match: { job_id: "my-job-id" } },
+  { $group: { _id: null, avg_fetch: { $avg: "$source_fetch_ms" }, p95_total: { $percentile: { input: "$total_run_ms", p: [0.95], method: "approximate" } } } }
+])
+```

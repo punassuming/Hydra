@@ -744,47 +744,14 @@ def test_validate_sensor_executor_sql_no_connection_fails():
     assert any("connection_uri or credential_ref" in e for e in result.errors)
 
 
-def test_activate_sensor_writes_to_redis():
-    """_activate_sensor stores state in Redis and emits a run_start event."""
-    import json
-    from unittest.mock import MagicMock, call
-    from scheduler.scheduler import _activate_sensor
-
-    mock_r = MagicMock()
-    job = {
-        "_id": "sensor-job-1",
-        "user": "alice",
-        "domain": "prod",
-        "executor": {
-            "type": "sensor",
-            "sensor_type": "http",
-            "target": "https://example.com/health",
-            "poll_interval_seconds": 15,
-            "timeout_seconds": 300,
-        },
-    }
-    _activate_sensor(mock_r, job, "prod", 1000.0, "scheduled")
-
-    # hset should have been called to store sensor run state
-    assert mock_r.hset.called
-    hset_call = mock_r.hset.call_args
-    key = hset_call.args[0]
-    assert key.startswith("sensor_run:prod:")
-    run_id = key.split(":")[-1]
-    stored = hset_call.kwargs["mapping"]
-    assert stored["job_id"] == "sensor-job-1"
-    assert stored["poll_interval_seconds"] == "15"
-    assert stored["timeout_seconds"] == "300"
-    assert stored["enqueue_reason"] == "scheduled"
-
-    # Should add run_id to active_sensors set
-    mock_r.sadd.assert_called_once_with("active_sensors:prod", run_id)
-
-    # Should push a run_start event
-    rpush_calls = mock_r.rpush.call_args_list
-    assert len(rpush_calls) == 1
-    event = json.loads(rpush_calls[0].args[1])
-    assert event["type"] == "run_start"
-    assert event["job_id"] == "sensor-job-1"
-    assert event["executor_type"] == "sensor"
-    assert event["run_id"] == run_id
+def test_sensor_dispatch_goes_through_normal_worker_path():
+    """Sensor jobs should NOT be intercepted by the scheduler; they go through
+    the normal worker dispatch path like any other job type."""
+    # Verify _activate_sensor no longer exists in the scheduler module
+    import scheduler.scheduler as sched_mod
+    assert not hasattr(sched_mod, "_activate_sensor"), (
+        "_activate_sensor should be removed; sensor jobs are dispatched to workers"
+    )
+    assert not hasattr(sched_mod, "sensor_evaluation_loop"), (
+        "sensor_evaluation_loop should be removed; sensor execution happens on workers"
+    )

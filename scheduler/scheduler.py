@@ -3,8 +3,6 @@ import threading
 import time
 import hashlib
 import json
-import uuid
-import urllib.request
 from datetime import datetime
 from typing import Dict, List
 
@@ -25,13 +23,6 @@ from .utils.encryption import decrypt_payload
 
 
 log = setup_logging("scheduler")
-
-# Maximum time (in seconds) for a single HTTP sensor request. Capped well below
-# the minimum poll_interval so that a slow check doesn't block the next interval.
-_HTTP_REQUEST_MAX_TIMEOUT_SECONDS = 25
-
-# Cadence (seconds) of the outer sensor evaluation loop.
-_SENSOR_LOOP_SLEEP_SECONDS = 5
 
 # SQLAlchemy URL scheme mapping used when building a connection URI from credential fields.
 _SQL_DIALECT_MAP = {
@@ -145,6 +136,51 @@ def _resolve_credential_refs(job: dict, db) -> dict:
             except Exception:
                 log.exception("Failed to decrypt source credential '%s' for job %s", src_credential_ref, job.get("_id"))
 
+    # Resolve sensor executor credential_ref
+    # Sensor jobs are dispatched to workers like any other job; credentials
+    # must be resolved here before the job envelope is pushed to Redis.
+    if executor.get("type") == "sensor":
+        credential_ref = (executor.get("credential_ref") or "").strip()
+        if credential_ref:
+            sensor_type = executor.get("sensor_type", "http")
+            cred_doc = db.credentials.find_one({"name": credential_ref, "domain": job_domain})
+            if not cred_doc:
+                log.warning("sensor credential_ref '%s' not found for job %s in domain %s", credential_ref, job.get("_id"), job_domain)
+            else:
+                try:
+                    decrypted = decrypt_payload(cred_doc["encrypted_payload"])
+                    if sensor_type == "sql":
+                        connection_uri = decrypted.get("connection_uri") or ""
+                        if not connection_uri and decrypted.get("host"):
+                            dialect = executor.get("dialect", "postgres")
+                            user = decrypted.get("username", "")
+                            password = decrypted.get("password", "")
+                            host = decrypted.get("host", "localhost")
+                            port = decrypted.get("port", "")
+                            database = decrypted.get("database", "")
+                            auth = f"{user}:{password}@" if user else ""
+                            port_part = f":{port}" if port else ""
+                            db_part = f"/{database}" if database else ""
+                            scheme = _SQL_DIALECT_MAP.get(dialect, dialect)
+                            connection_uri = f"{scheme}://{auth}{host}{port_part}{db_part}"
+                        if connection_uri:
+                            job = {**job, "executor": {**executor, "connection_uri": connection_uri}}
+                    else:
+                        headers = dict(executor.get("headers") or {})
+                        if decrypted.get("token"):
+                            headers["Authorization"] = f"Bearer {decrypted['token']}"
+                        elif decrypted.get("api_key"):
+                            headers["X-API-Key"] = decrypted["api_key"]
+                        elif decrypted.get("username") and decrypted.get("password"):
+                            import base64
+                            creds = base64.b64encode(
+                                f"{decrypted['username']}:{decrypted['password']}".encode()
+                            ).decode()
+                            headers["Authorization"] = f"Basic {creds}"
+                        job = {**job, "executor": {**executor, "headers": headers}}
+                except Exception:
+                    log.exception("Failed to decrypt sensor credential '%s' for job %s", credential_ref, job.get("_id"))
+
     return job
 
 
@@ -214,13 +250,9 @@ def scheduling_loop(stop_event: threading.Event):
             retry_attempt = int(meta.get("retry_attempt", 0))
             r.delete(meta_key)
 
-            # Route sensor jobs to the internal sensor evaluation loop
-            executor = job.get("executor") or {}
-            if executor.get("type") == "sensor":
-                _activate_sensor(r, job, domain, enqueued_ts, enqueue_reason)
-                log.info("Routed sensor job %s to sensor evaluation loop", job_id)
-                continue
-
+            # Sensor jobs are dispatched through the normal worker path.
+            # Workers execute the sensor polling loop directly, keeping the
+            # scheduler free from external workload polling.
             candidates = [
                 w
                 for w in list_online_workers(ttl, domain, respect_capacity=not bypass_concurrency)
@@ -548,246 +580,3 @@ def backfill_dispatch_loop(stop_event: threading.Event):
         except Exception as e:
             log.exception("Error in backfill dispatch loop: %s", e)
             time.sleep(1)
-
-
-def _activate_sensor(r, job: dict, domain: str, enqueued_ts: float, enqueue_reason: str | None):
-    """Move a sensor job into the active_sensors set and emit a run_start event."""
-    job_id = job["_id"]
-    run_id = uuid.uuid4().hex
-    now = time.time()
-    executor = job.get("executor") or {}
-    r.hset(
-        f"sensor_run:{domain}:{run_id}",
-        mapping={
-            "job_id": job_id,
-            "run_id": run_id,
-            "domain": domain,
-            "user": job.get("user", ""),
-            "start_ts": now,
-            "last_check_ts": "0",
-            "executor": json.dumps(executor),
-            "timeout_seconds": str(int(executor.get("timeout_seconds", 3600))),
-            "poll_interval_seconds": str(int(executor.get("poll_interval_seconds", 30))),
-            "enqueue_reason": enqueue_reason or "",
-        },
-    )
-    r.expire(f"sensor_run:{domain}:{run_id}", 7 * 24 * 3600)
-    r.sadd(f"active_sensors:{domain}", run_id)
-    # Emit run_start so a run document is created in Mongo
-    r.rpush(
-        f"run_events:{domain}",
-        json.dumps({
-            "type": "run_start",
-            "run_id": run_id,
-            "job_id": job_id,
-            "user": job.get("user", ""),
-            "domain": domain,
-            "worker_id": None,
-            "start_ts": now,
-            "scheduled_ts": enqueued_ts,
-            "executor_type": "sensor",
-        }),
-    )
-
-
-def _perform_http_sensor_check(executor: dict, db, domain: str) -> bool:
-    """Execute an HTTP sensor check. Returns True if the check succeeds."""
-    url = executor.get("target", "")
-    method = executor.get("method", "GET").upper()
-    headers = dict(executor.get("headers") or {})
-    body = executor.get("body")
-    expected_status = executor.get("expected_status") or [200]
-    request_timeout = min(int(executor.get("poll_interval_seconds", 30)), _HTTP_REQUEST_MAX_TIMEOUT_SECONDS)
-
-    # Resolve credential_ref → Authorization header
-    credential_ref = (executor.get("credential_ref") or "").strip()
-    if credential_ref:
-        cred_doc = db.credentials.find_one({"name": credential_ref, "domain": domain})
-        if cred_doc:
-            try:
-                decrypted = decrypt_payload(cred_doc["encrypted_payload"])
-                if decrypted.get("token"):
-                    headers["Authorization"] = f"Bearer {decrypted['token']}"
-                elif decrypted.get("api_key"):
-                    headers["X-API-Key"] = decrypted["api_key"]
-                elif decrypted.get("username") and decrypted.get("password"):
-                    import base64
-                    creds = base64.b64encode(
-                        f"{decrypted['username']}:{decrypted['password']}".encode()
-                    ).decode()
-                    headers["Authorization"] = f"Basic {creds}"
-            except Exception:
-                log.exception("Failed to decrypt sensor credential '%s'", credential_ref)
-
-    encoded_body = body.encode() if body else None
-    req = urllib.request.Request(url, data=encoded_body, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=request_timeout) as resp:
-            return resp.status in expected_status
-    except urllib.error.HTTPError as exc:
-        return exc.code in expected_status
-    except Exception as exc:
-        log.debug("HTTP sensor check failed for %s: %s", url, exc)
-        return False
-
-
-def _perform_sql_sensor_check(executor: dict, db, domain: str) -> bool:
-    """Execute a SQL sensor check. Returns True if the query returns at least one row."""
-    try:
-        import sqlalchemy
-    except ImportError:
-        log.error("sqlalchemy is not installed; cannot perform SQL sensor check")
-        return False
-
-    connection_uri = (executor.get("connection_uri") or "").strip()
-    credential_ref = (executor.get("credential_ref") or "").strip()
-    if not connection_uri and credential_ref:
-        cred_doc = db.credentials.find_one({"name": credential_ref, "domain": domain})
-        if cred_doc:
-            try:
-                decrypted = decrypt_payload(cred_doc["encrypted_payload"])
-                connection_uri = decrypted.get("connection_uri") or ""
-                if not connection_uri and decrypted.get("host"):
-                    dialect = executor.get("dialect", "postgres")
-                    user = decrypted.get("username", "")
-                    password = decrypted.get("password", "")
-                    host = decrypted.get("host", "localhost")
-                    port = decrypted.get("port", "")
-                    database = decrypted.get("database", "")
-                    auth = f"{user}:{password}@" if user else ""
-                    port_part = f":{port}" if port else ""
-                    db_part = f"/{database}" if database else ""
-                    scheme = _SQL_DIALECT_MAP.get(dialect, dialect)
-                    connection_uri = f"{scheme}://{auth}{host}{port_part}{db_part}"
-            except Exception:
-                log.exception("Failed to decrypt SQL sensor credential '%s'", credential_ref)
-
-    if not connection_uri:
-        log.warning("SQL sensor has no connection_uri; marking check as failed")
-        return False
-
-    query = (executor.get("target") or "").strip()
-    if not query:
-        log.warning("SQL sensor has empty query (target); marking check as failed")
-        return False
-
-    try:
-        engine = sqlalchemy.create_engine(connection_uri, pool_pre_ping=True)
-        with engine.connect() as conn:
-            result = conn.execute(sqlalchemy.text(query))
-            row = result.fetchone()
-            return row is not None
-    except Exception as exc:
-        log.debug("SQL sensor check failed: %s", exc)
-        return False
-
-
-def _emit_sensor_run_end(r, domain: str, run_id: str, job_id: str, user: str, status: str, reason: str, start_ts: float):
-    """Push a run_end event for a completed/failed sensor run."""
-    now = time.time()
-    r.rpush(
-        f"run_events:{domain}",
-        json.dumps({
-            "type": "run_end",
-            "run_id": run_id,
-            "job_id": job_id,
-            "user": user,
-            "domain": domain,
-            "worker_id": None,
-            "status": status,
-            "end_ts": now,
-            "start_ts": start_ts,
-            "returncode": 0 if status == "success" else 1,
-            "stdout": "",
-            "stderr": reason if status == "failed" else "",
-            "executor_type": "sensor",
-            "completion_reason": reason,
-        }),
-    )
-
-
-def sensor_evaluation_loop(stop_event: threading.Event):
-    """Evaluate active sensor runs and emit completion events when conditions are met.
-
-    Sensor jobs are routed here by the scheduling loop instead of being
-    dispatched to workers.  For each active sensor run the loop:
-
-    1. Checks whether ``poll_interval_seconds`` have elapsed since the last poll.
-    2. If so, performs the lightweight check (HTTP status or SQL row-count).
-    3. On success emits a ``run_end`` (success) event so downstream dependencies
-       trigger as normal.
-    4. On timeout emits a ``run_end`` (failed/timeout) event.
-    5. On a failed check (condition not yet met) simply updates the last-checked
-       timestamp and waits for the next interval.
-    """
-    db = get_db()
-    log.info("Sensor evaluation loop started")
-    while not stop_event.is_set():
-        try:
-            r = get_redis()
-            domains = list(r.smembers("hydra:domains") or []) or ["prod"]
-            for domain in domains:
-                run_ids = r.smembers(f"active_sensors:{domain}") or set()
-                for run_id in list(run_ids):
-                    try:
-                        state = r.hgetall(f"sensor_run:{domain}:{run_id}") or {}
-                        if not state:
-                            r.srem(f"active_sensors:{domain}", run_id)
-                            continue
-                        job_id = state.get("job_id", "")
-                        user = state.get("user", "")
-                        start_ts = float(state.get("start_ts", 0))
-                        last_check_ts = float(state.get("last_check_ts", 0))
-                        timeout_seconds = int(state.get("timeout_seconds", 3600))
-                        poll_interval = int(state.get("poll_interval_seconds", 30))
-                        executor_json = state.get("executor", "{}")
-                        executor = json.loads(executor_json)
-                        now = time.time()
-
-                        # Check for overall timeout
-                        if timeout_seconds > 0 and (now - start_ts) >= timeout_seconds:
-                            log.warning(
-                                "Sensor run %s (job %s) timed out after %.1fs",
-                                run_id, job_id, now - start_ts,
-                            )
-                            _emit_sensor_run_end(r, domain, run_id, job_id, user, "failed", "timeout", start_ts)
-                            r.srem(f"active_sensors:{domain}", run_id)
-                            r.delete(f"sensor_run:{domain}:{run_id}")
-                            continue
-
-                        # Check whether it's time to poll
-                        if (now - last_check_ts) < poll_interval:
-                            continue
-
-                        # Perform the sensor check
-                        sensor_type = executor.get("sensor_type", "http")
-                        try:
-                            if sensor_type == "http":
-                                succeeded = _perform_http_sensor_check(executor, db, domain)
-                            elif sensor_type == "sql":
-                                succeeded = _perform_sql_sensor_check(executor, db, domain)
-                            else:
-                                log.warning("Unknown sensor_type '%s' for run %s; skipping", sensor_type, run_id)
-                                r.hset(f"sensor_run:{domain}:{run_id}", "last_check_ts", str(now))
-                                continue
-                        except Exception:
-                            log.exception("Error performing sensor check for run %s", run_id)
-                            r.hset(f"sensor_run:{domain}:{run_id}", "last_check_ts", str(now))
-                            continue
-
-                        if succeeded:
-                            log.info("Sensor run %s (job %s) condition met; marking success", run_id, job_id)
-                            _emit_sensor_run_end(r, domain, run_id, job_id, user, "success", "condition_met", start_ts)
-                            r.srem(f"active_sensors:{domain}", run_id)
-                            r.delete(f"sensor_run:{domain}:{run_id}")
-                        else:
-                            log.debug(
-                                "Sensor run %s (job %s) condition not yet met; next check in %ss",
-                                run_id, job_id, poll_interval,
-                            )
-                            r.hset(f"sensor_run:{domain}:{run_id}", "last_check_ts", str(now))
-                    except Exception:
-                        log.exception("Error evaluating sensor run %s in domain %s", run_id, domain)
-        except Exception as exc:
-            log.exception("Error in sensor evaluation loop: %s", exc)
-        time.sleep(_SENSOR_LOOP_SLEEP_SECONDS)

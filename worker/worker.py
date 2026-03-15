@@ -6,6 +6,10 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from redis.exceptions import RedisError
 
+# Capture process start time before any significant work occurs so that
+# worker_startup_duration_ms can be accurately recorded at registration.
+_PROCESS_START_TS: float = time.time()
+
 from .redis_client import get_redis
 from .config import (
     get_worker_id,
@@ -56,6 +60,7 @@ def register_worker(worker_id: str, max_concurrency: int):
 
     shells = _detect_shells()
     capabilities = _detect_capabilities()
+    startup_duration_ms = round((time.time() - _PROCESS_START_TS) * 1000, 2)
 
     meta = {
         "os": platform.system().lower(),
@@ -77,6 +82,7 @@ def register_worker(worker_id: str, max_concurrency: int):
         "shells": ",".join(shells),
         "capabilities": ",".join(capabilities),
         "domain_token_hash": __import__("hashlib").sha256(domain_token.encode()).hexdigest(),
+        "startup_duration_ms": startup_duration_ms,
     }
     r.hset(worker_key, mapping=meta)
     append_worker_op(
@@ -91,6 +97,7 @@ def register_worker(worker_id: str, max_concurrency: int):
             "hostname": hostname,
             "run_user": meta.get("run_user"),
             "pid": os.getpid(),
+            "startup_duration_ms": startup_duration_ms,
         },
     )
 
@@ -274,14 +281,20 @@ def worker_main():
             attempts_used = 0
             last_reason = ""
             success = False
+            timings: dict = {}
             for _ in range(max(1, attempts)):
                 run_start_time = time.time()
+                attempt_timings: dict = {}
                 rc, stdout, stderr = execute_job(
                     job,
                     log_callback_out=handle_stdout,
                     log_callback_err=lambda text: stream_log("stderr", text),
                     kill_event=kill_event,
+                    timings=attempt_timings,
                 )
+                # Keep timings from the first (or only) attempt
+                if not timings:
+                    timings = attempt_timings
                 attempts_used += 1
                 success, last_reason = evaluate_completion(job, rc, stdout, stderr)
                 if success:
@@ -293,6 +306,7 @@ def worker_main():
                 if success:
                     break
 
+            end_ts = time.time()
             status = "success" if success else "failed"
             publish_run_event(
                 {
@@ -308,7 +322,7 @@ def worker_main():
                     "stderr": stderr,
                     "attempt": attempts_used,
                     "completion_reason": last_reason or "criteria not met",
-                    "end_ts": time.time(),
+                    "end_ts": end_ts,
                     "slot": slot_position,
                     "retries_remaining": retries_remaining,
                     "retry_attempt": retry_attempt,
@@ -319,6 +333,9 @@ def worker_main():
                     "bypass_concurrency": bypass_concurrency,
                     "start_ts": started_ts,
                     "scheduled_ts": envelope.get("dispatch_ts") or started_ts,
+                    "total_run_ms": round((end_ts - started_ts) * 1000, 2),
+                    "source_fetch_ms": timings.get("source_fetch_ms"),
+                    "env_prep_ms": timings.get("env_prep_ms"),
                 }
             )
             append_worker_op(
