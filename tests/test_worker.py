@@ -983,7 +983,7 @@ def test_execute_job_records_env_prep_timing():
     from worker.executor import execute_job
 
     job = {
-        "executor": {"type": "python", "code": "print(\'env-timing\')", "interpreter": "python3"},
+        "executor": {"type": "python", "code": 'print("env-timing")', "interpreter": "python3"},
         "timeout": 10,
     }
     timings = {}

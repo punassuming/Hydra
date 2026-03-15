@@ -282,6 +282,7 @@ def worker_main():
             last_reason = ""
             success = False
             timings: dict = {}
+            first_attempt = True
             for _ in range(max(1, attempts)):
                 run_start_time = time.time()
                 attempt_timings: dict = {}
@@ -292,9 +293,10 @@ def worker_main():
                     kill_event=kill_event,
                     timings=attempt_timings,
                 )
-                # Keep timings from the first (or only) attempt
-                if not timings:
+                # Capture timings from the first attempt only
+                if first_attempt:
                     timings = attempt_timings
+                    first_attempt = False
                 attempts_used += 1
                 success, last_reason = evaluate_completion(job, rc, stdout, stderr)
                 if success:

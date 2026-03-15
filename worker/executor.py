@@ -495,7 +495,7 @@ def execute_job(
                 fetch_fn=_fetch_source,
             )
             if timings is not None:
-                timings["source_fetch_ms"] = (time.time() - _source_fetch_start) * 1000
+                timings["source_fetch_ms"] = round((time.time() - _source_fetch_start) * 1000, 2)
             # Determine effective workdir
             base_path = source_dir
             if source.get("path"):
@@ -519,7 +519,7 @@ def execute_job(
                 _env_prep_start = time.time()
                 command, cleanup = prepare_python_command(executor, job_identifier)
                 if timings is not None:
-                    timings["env_prep_ms"] = (time.time() - _env_prep_start) * 1000
+                    timings["env_prep_ms"] = round((time.time() - _env_prep_start) * 1000, 2)
             except Exception as prep_err:
                 return 1, "", str(prep_err)
             tmp_code = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, prefix="hydra-py-",
