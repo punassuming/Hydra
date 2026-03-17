@@ -786,3 +786,216 @@ def test_execute_job_emits_artifact_via_stdout():
     # The artifact line should appear in stdout
     full_stdout = "".join(captured_stdout_lines)
     assert "__HYDRA_ARTIFACT__" in full_stdout
+
+
+# ---------------------------------------------------------------------------
+# Sensor executor (worker-side)
+# ---------------------------------------------------------------------------
+
+def test_sensor_http_condition_met(monkeypatch):
+    """Sensor executor returns success immediately when HTTP check succeeds on first poll."""
+    from worker.executor import _execute_sensor
+
+    monkeypatch.setattr("worker.executor._check_http_sensor", lambda executor: True)
+
+    executor = {
+        "sensor_type": "http",
+        "target": "http://example.com/health",
+        "poll_interval_seconds": 1,
+        "timeout_seconds": 10,
+    }
+    rc, out, err = _execute_sensor(executor)
+    assert rc == 0
+    assert "condition_met" in out
+    assert err == ""
+
+
+def test_sensor_http_timeout(monkeypatch):
+    """Sensor executor times out and returns failure if condition is never met."""
+    from worker.executor import _execute_sensor
+
+    monkeypatch.setattr("worker.executor._check_http_sensor", lambda executor: False)
+
+    executor = {
+        "sensor_type": "http",
+        "target": "http://example.com/health",
+        "poll_interval_seconds": 1,
+        "timeout_seconds": 2,
+    }
+    rc, out, err = _execute_sensor(executor)
+    assert rc == 1
+    assert "timed out" in err
+
+
+def test_sensor_kill_event_stops_loop(monkeypatch):
+    """Setting kill_event stops the sensor loop immediately."""
+    import threading
+    from worker.executor import _execute_sensor
+
+    monkeypatch.setattr("worker.executor._check_http_sensor", lambda executor: False)
+
+    executor = {
+        "sensor_type": "http",
+        "target": "http://example.com/health",
+        "poll_interval_seconds": 60,
+        "timeout_seconds": 300,
+    }
+    terminate = threading.Event()
+    terminate.set()
+    rc, out, err = _execute_sensor(executor, kill_event=terminate)
+    assert rc == 1
+    assert "killed" in err
+
+
+def test_sensor_unknown_sensor_type_returns_error():
+    """An unrecognised sensor_type returns a non-zero exit code."""
+    from worker.executor import _execute_sensor
+
+    executor = {
+        "sensor_type": "unknown_type",
+        "target": "https://example.com",
+        "poll_interval_seconds": 1,
+        "timeout_seconds": 5,
+    }
+    rc, out, err = _execute_sensor(executor)
+    assert rc == 1
+    assert "unknown sensor_type" in err
+
+
+def test_execute_job_sensor_executor(monkeypatch):
+    """execute_job routes sensor executor type to the sensor polling loop."""
+    from worker.executor import execute_job
+
+    monkeypatch.setattr("worker.executor._check_http_sensor", lambda executor: True)
+
+    job = {
+        "executor": {
+            "type": "sensor",
+            "sensor_type": "http",
+            "target": "http://example.com/health",
+            "poll_interval_seconds": 1,
+            "timeout_seconds": 10,
+        }
+    }
+    rc, out, err = execute_job(job)
+    assert rc == 0
+    assert "condition_met" in out
+
+
+# ---------------------------------------------------------------------------
+# Capability detection: fail-closed correctness
+# ---------------------------------------------------------------------------
+
+def test_detect_capabilities_shell_requires_working_shell(monkeypatch):
+    """shell/external should not be advertised when all shell binaries fail."""
+    import subprocess
+    from worker.executor import _detect_capabilities
+
+    def reject_all(cmd, **kwargs):
+        raise FileNotFoundError("mocked shell not found")
+
+    monkeypatch.setattr(subprocess, "run", reject_all)
+    caps = _detect_capabilities()
+    assert "shell" not in caps
+    assert "external" not in caps
+
+
+def test_detect_capabilities_sql_requires_python(monkeypatch):
+    """sql should not be advertised when Python interpreter is absent."""
+    import worker.executor as executor_mod
+    from worker.executor import _detect_capabilities
+
+    monkeypatch.setattr(executor_mod, "_find_python", lambda: "")
+    caps = _detect_capabilities()
+    assert "sql" not in caps
+
+
+def test_detect_capabilities_sensor_always_present():
+    """sensor capability should always be advertised (HTTP sensor uses stdlib)."""
+    from worker.executor import _detect_capabilities
+    caps = _detect_capabilities()
+    assert "sensor" in caps
+
+
+def test_detect_capabilities_no_false_positive_sql_without_driver(monkeypatch):
+    """sql should not be advertised when sqlalchemy and pymongo are both absent."""
+    import builtins
+    import worker.executor as executor_mod
+    from worker.executor import _detect_capabilities
+
+    original_import = builtins.__import__
+
+    def import_blocker(name, *args, **kwargs):
+        if name in ("sqlalchemy", "pymongo"):
+            raise ImportError(f"mocked: {name} unavailable")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_blocker)
+    monkeypatch.setattr(executor_mod, "_find_python", lambda: "python3")
+
+    caps = _detect_capabilities()
+    assert "sql" not in caps, "sql should not be advertised without sqlalchemy/pymongo"
+
+
+# ---------------------------------------------------------------------------
+# Startup timing instrumentation
+# ---------------------------------------------------------------------------
+
+def test_process_start_ts_is_set():
+    """_PROCESS_START_TS should be set at module import, before any registration."""
+    import time
+    import worker.worker as worker_mod
+
+    assert hasattr(worker_mod, "_PROCESS_START_TS")
+    assert isinstance(worker_mod._PROCESS_START_TS, float)
+    assert worker_mod._PROCESS_START_TS <= time.time()
+    assert time.time() - worker_mod._PROCESS_START_TS < 3600
+
+
+def test_execute_job_records_source_fetch_timing(monkeypatch, tmp_path):
+    """execute_job should populate timings["source_fetch_ms"] when source is fetched."""
+    from worker.utils.copy import fetch_copy_source as real_fetch
+    from worker.executor import execute_job
+
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    (src_dir / "run.sh").write_text("echo timing-ok")
+
+    def _fake_fetch(url, dest):
+        real_fetch(str(src_dir), dest)
+
+    monkeypatch.setattr("worker.executor.fetch_copy_source", _fake_fetch)
+
+    job = {
+        "source": {"protocol": "copy", "url": str(src_dir)},
+        "executor": {"type": "shell", "script": "echo timing-ok", "shell": "bash"},
+        "timeout": 5,
+    }
+    timings = {}
+    rc, out, err = execute_job(job, timings=timings)
+    assert rc == 0
+    assert "source_fetch_ms" in timings
+    assert timings["source_fetch_ms"] >= 0.0
+
+
+def test_execute_job_records_env_prep_timing():
+    """execute_job should populate timings["env_prep_ms"] for python executor."""
+    from worker.executor import execute_job
+
+    job = {
+        "executor": {"type": "python", "code": 'print("env-timing")', "interpreter": "python3"},
+        "timeout": 10,
+    }
+    timings = {}
+    rc, out, err = execute_job(job, timings=timings)
+    assert rc == 0
+    assert "env_prep_ms" in timings
+    assert timings["env_prep_ms"] >= 0.0
+
+
+def test_execute_job_no_timings_when_not_provided():
+    """execute_job should work fine without a timings dict (backwards compatible)."""
+    from worker.executor import execute_job
+    job = {"executor": {"type": "shell", "script": "echo ok", "shell": "bash"}, "timeout": 5}
+    rc, out, err = execute_job(job)
+    assert rc == 0

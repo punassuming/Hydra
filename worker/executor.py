@@ -1,9 +1,10 @@
-from typing import Tuple, Callable, Optional
+from typing import Tuple, Callable, Optional, Dict
 import tempfile
 import shutil
 import os
 import platform
 import json
+import time
 
 from .utils.os_exec import run_external, _run_with_callbacks
 from .utils.python_env import prepare_python_command
@@ -76,64 +77,96 @@ def _find_python() -> str:
 
 
 def _detect_shells() -> list[str]:
-    """Return list of shells available on this system."""
+    """Return list of shells available on this system.
+
+    Only a shell that successfully executes a trivial command is advertised.
+    """
     found: list[str] = []
     is_win = platform.system().lower().startswith("win")
     shell_path = _get_shell_path()
     candidates = {
-        "bash": [shell_path or ("/bin/bash" if not is_win else "bash"), "--version"],
-        "sh": ["/bin/sh", "--version"] if not is_win else [],
-        "cmd": ["cmd", "/c", "echo ok"] if is_win else [],
-        "powershell": ["powershell", "-Command", "echo ok"] if is_win else [],
-        "pwsh": ["pwsh", "-Command", "echo ok"],
+        "bash": [shell_path or ("/bin/bash" if not is_win else "bash"), "-c", "exit 0"],
+        "sh": ["/bin/sh", "-c", "exit 0"] if not is_win else [],
+        "cmd": ["cmd", "/c", "exit 0"] if is_win else [],
+        "powershell": ["powershell", "-Command", "exit 0"] if is_win else [],
+        "pwsh": ["pwsh", "-Command", "exit 0"],
     }
     import subprocess
     for name, cmd in candidates.items():
         if not cmd:
             continue
         try:
-            subprocess.run(cmd, capture_output=True, timeout=5)
-            found.append(name)
+            result = subprocess.run(cmd, capture_output=True, timeout=5)
+            if result.returncode == 0:
+                found.append(name)
         except Exception:
             pass
     return found
 
 
 def _detect_capabilities() -> list[str]:
-    """Return list of executor types this worker can handle."""
-    caps = ["shell", "external"]
-    # python
-    if _find_python():
+    """Return list of executor types this worker can fully support.
+
+    This function is intentionally fail-closed: a capability is only
+    advertised when a concrete preflight check confirms that the required
+    runtime is present and functional.  No capability is added
+    optimistically.
+    """
+    caps: list[str] = []
+
+    # shell / external — require at least one shell to be functional
+    shells = _detect_shells()
+    if shells:
+        caps.append("shell")
+        caps.append("external")
+
+    # python — Python interpreter must actually execute code
+    python_interp = _find_python()
+    if python_interp:
         caps.append("python")
-    # powershell/pwsh
+
+    # powershell — require a working pwsh/powershell binary
     import subprocess
     for ps in ("pwsh", "powershell"):
         try:
-            subprocess.run([ps, "-Command", "echo ok"], capture_output=True, timeout=5)
-            if "powershell" not in caps:
-                caps.append("powershell")
-            break
+            result = subprocess.run([ps, "-Command", "exit 0"], capture_output=True, timeout=5)
+            if result.returncode == 0:
+                if "powershell" not in caps:
+                    caps.append("powershell")
+                break
         except Exception:
             pass
+
     is_win = platform.system().lower().startswith("win")
     if is_win:
         caps.append("batch")
-    # sql - only advertise if at least one driver is available
-    _has_sql_driver = False
-    try:
-        import sqlalchemy  # noqa: F401
-        _has_sql_driver = True
-    except ImportError:
-        pass
-    try:
-        import pymongo  # noqa: F401
-        _has_sql_driver = True
-    except ImportError:
-        pass
-    if _has_sql_driver:
-        caps.append("sql")
-    # http - always available (uses urllib from stdlib)
+
+    # sql — requires Python (the SQL driver script is executed via Python subprocess)
+    # AND at least one DB driver importable
+    if python_interp:
+        _has_sql_driver = False
+        try:
+            import sqlalchemy  # noqa: F401
+            _has_sql_driver = True
+        except ImportError:
+            pass
+        if not _has_sql_driver:
+            try:
+                import pymongo  # noqa: F401
+                _has_sql_driver = True
+            except ImportError:
+                pass
+        if _has_sql_driver:
+            caps.append("sql")
+
+    # http — always available (uses urllib from stdlib)
     caps.append("http")
+
+    # sensor — HTTP sensor uses stdlib (always available); SQL sensor requires
+    # the same prerequisites as the sql executor (Python + driver).
+    # Advertise sensor whenever http is available so HTTP-type sensors can run.
+    caps.append("sensor")
+
     return caps
 
 
@@ -280,11 +313,115 @@ def _execute_http(executor: dict, timeout, log_callback_out, log_callback_err):
     return 0, result, ""
 
 
+def _check_http_sensor(executor: dict) -> bool:
+    """Return True if the HTTP sensor condition is met (expected status received)."""
+    import urllib.request
+    import urllib.error
+
+    url = executor.get("target", "")
+    if not url:
+        return False
+    method = executor.get("method", "GET").upper()
+    headers = dict(executor.get("headers") or {})
+    body = executor.get("body")
+    expected_status = executor.get("expected_status") or [200]
+    # Cap per-request timeout well below poll_interval so a slow response
+    # does not delay the next interval check.
+    request_timeout = min(int(executor.get("poll_interval_seconds", 30)), 25)
+
+    body_bytes = body.encode("utf-8") if body else None
+    req = urllib.request.Request(url, data=body_bytes, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=request_timeout) as resp:
+            return resp.status in expected_status
+    except urllib.error.HTTPError as exc:
+        return exc.code in expected_status
+    except Exception:
+        return False
+
+
+def _check_sql_sensor(executor: dict) -> bool:
+    """Return True if the SQL sensor condition is met (query returns ≥1 row)."""
+    connection_uri = (executor.get("connection_uri") or "").strip()
+    if not connection_uri:
+        return False
+    query = (executor.get("target") or "").strip()
+    if not query:
+        return False
+    dialect = executor.get("dialect", "postgres")
+    if dialect == "mongodb":
+        try:
+            from pymongo import MongoClient  # noqa: F401
+            client = MongoClient(connection_uri, serverSelectionTimeoutMS=5000)
+            db = client.get_default_database()
+            result = db.command(query)
+            return bool(result)
+        except Exception:
+            return False
+    else:
+        try:
+            import sqlalchemy
+            engine = sqlalchemy.create_engine(connection_uri, pool_pre_ping=True)
+            with engine.connect() as conn:
+                result = conn.execute(sqlalchemy.text(query))
+                row = result.fetchone()
+                return row is not None
+        except Exception:
+            return False
+
+
+def _execute_sensor(executor: dict, kill_event: Optional[object] = None,
+                    log_callback_out: Optional[Callable[[str], None]] = None) -> Tuple[int, str, str]:
+    """Execute a sensor job: poll until condition is met or overall timeout expires.
+
+    The sensor loops on the *worker*, keeping the scheduler free from
+    direct external polling.  Polling respects ``poll_interval_seconds``
+    and the overall run is bounded by ``timeout_seconds``.
+    """
+    sensor_type = executor.get("sensor_type", "http")
+    poll_interval = max(1, int(executor.get("poll_interval_seconds", 30)))
+    timeout_seconds = max(1, int(executor.get("timeout_seconds", 3600)))
+    start_ts = time.time()
+
+    while True:
+        if kill_event and kill_event.is_set():
+            return 1, "", "sensor run killed"
+
+        now = time.time()
+        elapsed = now - start_ts
+        if elapsed >= timeout_seconds:
+            return 1, "", f"sensor timed out after {elapsed:.1f}s"
+
+        if sensor_type == "http":
+            met = _check_http_sensor(executor)
+        elif sensor_type == "sql":
+            met = _check_sql_sensor(executor)
+        else:
+            return 1, "", f"unknown sensor_type '{sensor_type}'"
+
+        if met:
+            msg = f"condition_met after {time.time() - start_ts:.1f}s"
+            if log_callback_out:
+                log_callback_out(msg)
+            return 0, msg, ""
+
+        # Wait out the poll interval in small increments so we can react to
+        # kill events and the overall timeout without excess latency.
+        wait_end = time.time() + poll_interval
+        while time.time() < wait_end:
+            if kill_event and kill_event.is_set():
+                return 1, "", "sensor run killed"
+            if time.time() - start_ts >= timeout_seconds:
+                break
+            time.sleep(min(1.0, wait_end - time.time()))
+
+
 def execute_job(
     job: dict,
     log_callback_out: Optional[Callable[[str], None]] = None,
     log_callback_err: Optional[Callable[[str], None]] = None,
     kill_event: Optional[object] = None,
+    timings: Optional[Dict[str, float]] = None,
 ) -> Tuple[int, str, str]:
     executor = job.get("executor") or {}
     timeout = job.get("timeout", 0) or None
@@ -300,6 +437,11 @@ def execute_job(
 
     if (impersonate_user or kerberos) and not supports_impersonation:
         return 1, "", f"impersonation/kerberos executor settings are supported only on Linux/macOS workers (current: {platform.system()})"
+
+    # Sensor executor: delegate entirely to the sensor polling loop.
+    # Runs on the worker — no external polling in the scheduler control plane.
+    if exec_type == "sensor":
+        return _execute_sensor(executor, kill_event=kill_event, log_callback_out=log_callback_out)
 
     effective_env = dict(env or {})
     if kerberos.get("ccache"):
@@ -344,6 +486,7 @@ def execute_job(
                 fetch_git_source(src_cfg["url"], src_cfg.get("ref", "main"), dest_dir, token=src_cfg.get("token") or "", sparse_path=sparse_path)
 
         try:
+            _source_fetch_start = time.time()
             cache = get_workspace_cache()
             source_dir, release_fn = cache.get_or_create(
                 domain=domain,
@@ -351,6 +494,8 @@ def execute_job(
                 source_config=source,
                 fetch_fn=_fetch_source,
             )
+            if timings is not None:
+                timings["source_fetch_ms"] = round((time.time() - _source_fetch_start) * 1000, 2)
             # Determine effective workdir
             base_path = source_dir
             if source.get("path"):
@@ -371,7 +516,10 @@ def execute_job(
         if exec_type == "python":
             code = executor.get("code") or job.get("command", "")
             try:
+                _env_prep_start = time.time()
                 command, cleanup = prepare_python_command(executor, job_identifier)
+                if timings is not None:
+                    timings["env_prep_ms"] = round((time.time() - _env_prep_start) * 1000, 2)
             except Exception as prep_err:
                 return 1, "", str(prep_err)
             tmp_code = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, prefix="hydra-py-",
