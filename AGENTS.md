@@ -26,6 +26,10 @@ Hydra Jobs is a distributed job runner designed for flexibility and scalability.
 ## Workflow & Architecture (Internal Details)
 
 - Scheduler (`scheduler/`) runs seven background loops: `scheduling_loop` dispatches jobs from `job_queue:<domain>:pending` to `job_queue:<domain>:<worker_id>`, `failover_loop` requeues jobs from offline workers and prunes stale offline worker records after a retention window, `schedule_trigger_loop` advances cron/interval jobs, `run_event_loop` consumes `run_events:<domain>` from Redis and persists run docs in Mongo, `timeout_enforcement_loop` marks stale runs as failed, `sla_monitoring_loop` checks SLA deadlines, and `backfill_dispatch_loop` handles historical backfill runs. There is **no** scheduler-side sensor evaluation loop — sensor jobs are dispatched to workers like any other job type.
+- **Control-plane separation**: The scheduler supports two runtime modes via `HYDRA_MODE`:
+  - `combined` (default): API + all orchestration loops run in one process (backward compatible, easiest for local dev).
+  - `api`: API only; no background loops. Run `python -m scheduler.orchestrator_entrypoint` as a separate process for the control-plane.
+  - The `OrchestratorManager` in `scheduler/orchestrator.py` owns loop registration, thread startup, stop signaling, and writes a heartbeat to `hydra:orchestrator:heartbeat` in Redis (TTL 30s, refreshed every 10s). Use `GET /health/orchestration` to check orchestrator liveness independently of API health.
 - Terminal failures can trigger `on_failure_webhooks` and SMTP email alerts (`on_failure_email_to` + `on_failure_email_credential_ref`).
 - Scheduler admin API can provision domain-scoped Redis ACL worker access (`/admin/domains/{domain}/redis_acl/rotate`) and returns credentials for that domain; workers use `DOMAIN` as Redis username and `REDIS_PASSWORD` as secret.
 - Worker Redis ACL username is the domain name itself (legacy hashed usernames are cleaned up on rotation/delete).
@@ -69,7 +73,10 @@ Hydra Jobs is a distributed job runner designed for flexibility and scalability.
 
 ## Project Structure & Key Modules
 
-- `scheduler/main.py` bootstraps FastAPI + CORS and starts the scheduling/failover/schedule threads.
+- `scheduler/main.py` bootstraps FastAPI + CORS, reads `HYDRA_MODE`, and (in `combined` mode) starts all orchestration loops via `OrchestratorManager`.
+- `scheduler/startup.py` — shared initialisation helpers (`ensure_admin_token`, `ensure_domains_seeded`) used by both the API and the standalone orchestrator entrypoint.
+- `scheduler/orchestrator.py` — `OrchestratorManager` (loop registry, thread management, Redis heartbeat) and `create_standard_orchestrator()` factory.
+- `scheduler/orchestrator_entrypoint.py` — standalone control-plane process; run with `python -m scheduler.orchestrator_entrypoint` when `HYDRA_MODE=api`.
 - `scheduler/api/*` expose jobs, workers, health, events (SSE), logs streaming, history, and admin domain/template management.
 - `scheduler/api/workers.py` — worker list/state + metrics/timeline endpoints.
 - `scheduler/api/ai.py` — AI endpoints (Generate/Analyze).

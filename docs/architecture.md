@@ -4,11 +4,57 @@
 
 | Component | Role |
 |---|---|
-| **Scheduler** | FastAPI service: REST API, job orchestration, scheduling, failover, and persistence |
+| **Scheduler API** | FastAPI service: REST API + SSE streams. In `api` mode: API only. In `combined` mode (default): API + orchestration loops. |
+| **Orchestrator** | Control-plane process: owns all background reconciliation loops (dispatch, failover, schedule, events, monitoring). Can run as a separate process (`python -m scheduler.orchestrator_entrypoint`) or co-located with the API in `combined` mode. |
 | **Redis** | Message bus: job queues, worker coordination, heartbeats, log streaming, run events |
 | **MongoDB** | Durable store: domains, job definitions, run history, credentials |
 | **Workers** | Execution agents: Redis-only at runtime — receive jobs, run them, emit events. Available in Python and Go with feature parity. |
 | **UI** | React frontend: monitors jobs/workers/runs via scheduler REST API and SSE |
+
+## Runtime Modes
+
+### Combined mode (default)
+
+Both the API service and all orchestration loops run inside the same process. This is the default for simplicity, local development, and small deployments.
+
+```
+HYDRA_MODE=combined  (or unset)
+```
+
+Start with the standard Compose file:
+
+```bash
+docker compose up --build
+```
+
+### Separated mode
+
+The API service and control-plane orchestrator run as separate processes. This gives independent fault domains, restartability, and observability per role.
+
+```
+HYDRA_MODE=api          # on the scheduler container
+HYDRA_MODE=orchestrator # on the orchestrator container (informational)
+```
+
+Start with the separated override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.separated.yml up --build
+```
+
+### Process ownership summary
+
+| Responsibility | Combined | API process | Orchestrator process |
+|---|:---:|:---:|:---:|
+| REST API + SSE | ✓ | ✓ | — |
+| Schedule advancement (cron/interval) | ✓ | — | ✓ |
+| Job dispatch to workers | ✓ | — | ✓ |
+| Worker failover + queue drain | ✓ | — | ✓ |
+| Run event ingestion (Redis → MongoDB) | ✓ | — | ✓ |
+| Timeout enforcement | ✓ | — | ✓ |
+| SLA monitoring | ✓ | — | ✓ |
+| Backfill dispatch | ✓ | — | ✓ |
+| Orchestrator heartbeat | ✓ | — | ✓ |
 
 ## Architecture Diagram
 
@@ -16,11 +62,16 @@
 flowchart TB
     UI["React UI\n(Vite + Ant Design)"]
 
-    subgraph Scheduler["Scheduler (FastAPI)"]
+    subgraph APIService["Scheduler API (FastAPI)"]
         API["REST API\n+ SSE streams"]
+    end
+
+    subgraph ControlPlane["Orchestrator (control-plane)"]
         STL["Schedule Trigger Loop\n(cron / interval → dispatch)"]
         DFL["Dispatch / Failover Loop\n(pending queue → worker queues)"]
         REL["Run Event Loop\n(run_events → MongoDB)"]
+        MON["Timeout · SLA · Backfill\nMonitors"]
+        HB["Orchestrator Heartbeat\n(hydra:orchestrator:heartbeat)"]
     end
 
     subgraph Stores["Data Stores"]
@@ -38,13 +89,15 @@ flowchart TB
     UI -- "HTTP / SSE" --> API
     API -- "read / write" --> MongoDB
 
-    %% Scheduler internal loops ↔ Redis + MongoDB
+    %% Orchestrator loops ↔ Redis + MongoDB
     STL -- "advance schedule" --> MongoDB
     STL -- "enqueue pending" --> Redis
     DFL -- "read worker state\n+ pending queue" --> Redis
     DFL -- "dispatch → worker queue" --> Redis
     REL -- "consume run_events" --> Redis
     REL -- "persist job_runs" --> MongoDB
+    MON -- "timeout/SLA/backfill" --> MongoDB
+    HB -- "heartbeat key\n(TTL=30s)" --> Redis
 
     %% Scheduler resolves credentials at dispatch time
     DFL -- "resolve credential_refs" --> MongoDB
@@ -59,6 +112,36 @@ flowchart TB
     WA2 -- "heartbeat · logs\nrun events · ops" --> Redis
     WB1 -- "heartbeat · logs\nrun events · ops" --> Redis
 ```
+
+> **Note:** In `combined` mode both boxes (`Scheduler API` and `Orchestrator`) run inside the same OS process. In `separated` mode they are distinct processes (or containers) connected only through Redis and MongoDB.
+
+## Orchestration Health
+
+The `OrchestratorManager` (owned by either the combined API process or the standalone orchestrator) writes a heartbeat key to Redis every 10 seconds:
+
+```
+hydra:orchestrator:heartbeat  →  {"ts": <unix timestamp>, "loops": ["scheduling", "failover", ...]}
+```
+
+The key has a 30-second TTL; if the process dies the key expires automatically.
+
+To check orchestration health:
+
+```bash
+GET /health/orchestration
+```
+
+Example responses:
+
+```json
+{"status": "ok", "age_seconds": 3.2, "loops": ["scheduling", "failover", "schedule_trigger", "run_event", "timeout", "sla", "backfill"]}
+{"status": "stale", "age_seconds": 45.1, "loops": [...]}
+{"status": "unknown", "message": "No orchestrator heartbeat found. ..."}
+```
+
+This lets operators and monitoring systems independently verify:
+- `GET /health` — API is up and can serve requests.
+- `GET /health/orchestration` — Control-plane loops are running and healthy.
 
 ## Data Flow
 
