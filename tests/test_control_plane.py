@@ -236,6 +236,15 @@ class TestOrchestrationHealthEndpoint(unittest.TestCase):
         data = resp.json()
         self.assertEqual(data["status"], "unknown")
 
+    def test_health_unknown_when_ts_missing(self):
+        payload = json.dumps({"loops": ["scheduling"]})  # no "ts" field
+        fake = self._mock_redis(payload)
+        with patch("scheduler.api.health.get_redis", return_value=fake):
+            resp = self.client.get("/health/orchestration", headers=self.headers)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["status"], "unknown")
+
 
 # ---------------------------------------------------------------------------
 # HYDRA_MODE integration tests
@@ -248,19 +257,20 @@ class TestHydraModeIntegration(unittest.TestCase):
         self.assertTrue(hasattr(main_module, "HYDRA_MODE"))
 
     def test_combined_mode_is_default(self):
-        import os
-        # Save and clear HYDRA_MODE to test default behaviour
-        old = os.environ.pop("HYDRA_MODE", None)
-        try:
-            # The default is resolved at module import time; verify the constant.
-            from scheduler import main as main_module
-            # If env var not set, the module should have defaulted to "combined"
-            # (it may have already been imported; inspect the module attribute).
-            # We can only assert the value is one of the valid modes.
-            self.assertIn(main_module.HYDRA_MODE, ("combined", "api", "orchestrator"))
-        finally:
-            if old is not None:
-                os.environ["HYDRA_MODE"] = old
+        # Verify that HYDRA_MODE defaults to "combined" when the env var is unset.
+        # We check by running a clean Python subprocess so the module isn't already cached.
+        import subprocess
+        import sys
+        result = subprocess.run(
+            [sys.executable, "-c",
+             "import os; os.environ.pop('HYDRA_MODE', None); "
+             "import importlib; import scheduler.main as m; importlib.reload(m); "
+             "print(m.HYDRA_MODE)"],
+            capture_output=True, text=True, timeout=10,
+            cwd="/home/runner/work/Hydra/Hydra",
+            env={k: v for k, v in __import__("os").environ.items() if k != "HYDRA_MODE"},
+        )
+        self.assertIn("combined", result.stdout.strip(), result.stderr)
 
     def test_api_mode_does_not_start_loops(self):
         """When HYDRA_MODE=api, on_startup must not start any orchestrator loops."""

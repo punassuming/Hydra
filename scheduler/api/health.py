@@ -48,7 +48,11 @@ def orchestration_health():
     except Exception:
         return {"status": "unknown", "message": "Malformed heartbeat payload"}
 
-    age_seconds = round(time.time() - data.get("ts", 0), 1)
+    ts = data.get("ts")
+    if not ts:
+        return {"status": "unknown", "message": "Heartbeat payload missing timestamp"}
+
+    age_seconds = round(time.time() - ts, 1)
     loops = data.get("loops", [])
 
     if age_seconds > HEARTBEAT_TTL:
