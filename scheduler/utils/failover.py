@@ -1,4 +1,5 @@
 import os
+import json
 import time
 from datetime import datetime
 from typing import List, Tuple
@@ -29,13 +30,27 @@ def find_offline_workers(ttl_seconds: int) -> List[Tuple[str, float]]:
 
 
 def requeue_jobs_for_worker(domain_and_worker: str):
+    """Recover all in-flight work from an offline worker.
+
+    Two categories of jobs need recovery:
+
+    1. **Running jobs** – recorded in ``worker_running_set:<domain>:<worker_id>``.
+       These had their ``run_start`` event emitted; we mark them failed in MongoDB
+       and return them to the pending queue so they can be retried.
+
+    2. **Dispatched-but-not-started jobs** – sitting in the per-worker queue
+       ``job_queue:<domain>:<worker_id>`` after the scheduler pushed them but before
+       the worker's BLPOP consumed them.  Without this drain, those envelopes are
+       silently lost when the worker dies.  We move them back to the domain pending
+       queue preserving their original priority and enqueue metadata.
+    """
     r = get_redis()
     db = get_db()
     domain, worker_id = domain_and_worker.split(":", 1)
     set_key = f"worker_running_set:{domain}:{worker_id}"
     job_ids = r.smembers(set_key) or []
     if job_ids:
-        log.warning("Requeuing %d job(s) from offline worker %s", len(job_ids), worker_id)
+        log.warning("Requeuing %d running job(s) from offline worker %s", len(job_ids), worker_id)
         append_worker_op(
             domain=domain,
             worker_id=worker_id,
@@ -67,7 +82,47 @@ def requeue_jobs_for_worker(domain_and_worker: str):
         r.expire(f"job_enqueue_meta:{domain}:{job_id}", 24 * 3600)
         r.srem(set_key, job_id)
         event_bus.publish("job_requeued", {"job_id": job_id, "worker_id": worker_id, "domain": domain})
-        # Optionally update last run doc to pending again (leave as is; worker will update when rerun)
+
+    # Drain the per-worker dispatch queue: recover envelopes that were pushed by
+    # the scheduler but never consumed by the worker (dispatched-but-not-started).
+    queue_key = f"job_queue:{domain}:{worker_id}"
+    queued_items = r.lrange(queue_key, 0, -1) or []
+    drained_count = 0
+    for raw in queued_items:
+        try:
+            envelope = json.loads(raw)
+        except Exception:
+            continue
+        job_id = envelope.get("job_id")
+        if not job_id:
+            continue
+        priority = float((envelope.get("job") or {}).get("priority", 5))
+        r.zadd(f"job_queue:{domain}:pending", {job_id: priority})
+        r.hset(
+            f"job_enqueue_meta:{domain}:{job_id}",
+            mapping={
+                "enqueued_ts": envelope.get("enqueued_ts") or time.time(),
+                "reason": "failover_requeue",
+                "retry_attempt": envelope.get("retry_attempt", 0),
+            },
+        )
+        r.expire(f"job_enqueue_meta:{domain}:{job_id}", 24 * 3600)
+        drained_count += 1
+        event_bus.publish("job_requeued", {"job_id": job_id, "worker_id": worker_id, "domain": domain})
+    if drained_count:
+        log.warning(
+            "Drained %d dispatched-but-not-started envelope(s) from offline worker %s queue",
+            drained_count, worker_id,
+        )
+        append_worker_op(
+            domain=domain,
+            worker_id=worker_id,
+            op_type="failover",
+            message=f"Drained {drained_count} dispatched-but-not-started envelope(s) from worker queue",
+            details={"drained_count": drained_count},
+        )
+    r.delete(queue_key)
+
     # Reset current_running counter to 0
     r.hset(f"workers:{domain}:{worker_id}", mapping={"current_running": 0, "status": "offline"})
     append_worker_op(
