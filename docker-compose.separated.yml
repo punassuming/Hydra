@@ -1,0 +1,42 @@
+# docker-compose.separated.yml
+#
+# Docker Compose override that separates the scheduler API from the
+# control-plane orchestrator into two distinct services.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.separated.yml up --build
+#
+# What this does:
+#   - scheduler: starts in HYDRA_MODE=api (API only, no background loops)
+#   - orchestrator: new service that runs only the control-plane loops
+#
+# In this mode you can scale or restart each role independently.
+# Use GET /health/orchestration on the scheduler API to verify the
+# orchestrator is running and healthy.
+#
+# For everyday development the default docker-compose.yml is simpler
+# (combined mode, both roles in one process).
+
+services:
+  scheduler:
+    environment:
+      - HYDRA_MODE=api
+
+  orchestrator:
+    build:
+      context: ./scheduler
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_PASSWORD=${SCHEDULER_REDIS_PASSWORD:-}
+      - MONGO_URL=mongodb://mongo:27017
+      - MONGO_DB=hydra_jobs
+      - SCHEDULER_HEARTBEAT_TTL=10
+      - HYDRA_MODE=orchestrator
+    command: ["python", "-m", "scheduler.orchestrator_entrypoint"]
+    depends_on:
+      - redis
+      - mongo
+    restart: unless-stopped

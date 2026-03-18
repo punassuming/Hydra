@@ -1,7 +1,4 @@
 import os
-import threading
-import secrets
-import hashlib
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -15,17 +12,25 @@ from .api.admin import router as admin_router
 from .api.credentials import router as credentials_router
 from .api.domain import router as domain_router
 from .api.ai import router as ai_router
-from .scheduler import scheduling_loop, failover_loop, schedule_trigger_loop, timeout_enforcement_loop, sla_monitoring_loop, backfill_dispatch_loop
-from .run_events import run_event_loop
+from .orchestrator import OrchestratorManager, create_standard_orchestrator
+from .startup import ensure_admin_token, ensure_domains_seeded
 from .utils.logging import setup_logging
 from .utils.auth import enforce_api_key
-from .utils.redis_acl import ensure_worker_acl_user
-from .redis_client import get_redis
-from .mongo_client import get_db
 
 
 log = setup_logging("scheduler.main")
-DEFAULT_ADMIN_TOKEN = "admin_secret"
+
+# ---------------------------------------------------------------------------
+# Runtime mode
+# ---------------------------------------------------------------------------
+# HYDRA_MODE controls whether orchestration loops are co-located with the API.
+#
+#   combined  (default) — API + all orchestration loops in one process.
+#                         Preserves backward-compatible single-service behaviour.
+#   api       — API only.  No orchestration loops are started.  Run
+#               ``python -m scheduler.orchestrator_entrypoint`` separately.
+#
+HYDRA_MODE = os.getenv("HYDRA_MODE", "combined")
 
 app = FastAPI(title="hydra-jobs scheduler")
 app.middleware("http")(enforce_api_key)
@@ -52,102 +57,28 @@ app.include_router(credentials_router)
 app.include_router(domain_router)
 app.include_router(ai_router)
 
-stop_event = threading.Event()
-
-
-def _ensure_domains_seeded():
-    r = get_redis()
-    db = get_db()
-    # Always cache existing hashes
-    for doc in db.domains.find({}):
-        domain = doc.get("domain")
-        token_hash = doc.get("token_hash")
-        if not domain or not token_hash:
-            continue
-        r.sadd("hydra:domains", domain)
-        r.set(f"token_hash:{domain}", token_hash)
-        r.set(f"token_hash:{token_hash}:domain", domain)
-        acl_password = doc.get("worker_redis_acl_password")
-        if acl_password:
-            try:
-                ensure_worker_acl_user(domain, password=acl_password)
-            except Exception as exc:
-                log.warning("Failed to restore Redis ACL user for domain %s: %s", domain, exc)
-        else:
-            log.warning(
-                "Domain %s has no persisted worker Redis ACL password; rotate ACL once to enable restart-safe recovery.",
-                domain,
-            )
-    # Optional seeding (used by dev compose)
-    if db.domains.count_documents({}) == 0:
-        token = secrets.token_hex(24)
-        token_hash = hashlib.sha256(token.encode()).hexdigest()
-        db.domains.insert_one({"domain": "prod", "display_name": "Production", "description": "Production", "token_hash": token_hash})
-        r.sadd("hydra:domains", "prod")
-        r.set(f"token_hash:prod", token_hash)
-        r.set(f"token_hash:{token_hash}:domain", "prod")
-        log.warning("Seeded default prod domain with token: %s", token)
-
-
-def _ensure_admin_token():
-    global os
-    from . import utils
-    admin_token = os.getenv("ADMIN_TOKEN")
-    if not admin_token:
-        admin_token = DEFAULT_ADMIN_TOKEN
-        os.environ["ADMIN_TOKEN"] = admin_token
-        log.warning("ADMIN_TOKEN not set; using default ADMIN_TOKEN. Set ADMIN_TOKEN in production.")
-    # update auth module variable for consistency
-    try:
-        from .utils import auth
-        auth.ADMIN_TOKEN = admin_token
-    except Exception:
-        pass
+# Module-level orchestrator instance — set during startup when running in combined mode.
+_orchestrator: OrchestratorManager | None = None
 
 
 @app.on_event("startup")
 def on_startup():
-    _ensure_admin_token()
-    _ensure_domains_seeded()
-    log.info("Starting scheduler background threads")
-    app.state.scheduler_thread = threading.Thread(target=scheduling_loop, args=(stop_event,), daemon=True)
-    app.state.failover_thread = threading.Thread(target=failover_loop, args=(stop_event,), daemon=True)
-    app.state.schedule_thread = threading.Thread(target=schedule_trigger_loop, args=(stop_event,), daemon=True)
-    app.state.run_event_thread = threading.Thread(target=run_event_loop, args=(stop_event,), daemon=True)
-    app.state.timeout_thread = threading.Thread(target=timeout_enforcement_loop, args=(stop_event,), daemon=True)
-    app.state.sla_thread = threading.Thread(target=sla_monitoring_loop, args=(stop_event,), daemon=True)
-    app.state.backfill_thread = threading.Thread(target=backfill_dispatch_loop, args=(stop_event,), daemon=True)
-    app.state.scheduler_thread.start()
-    app.state.failover_thread.start()
-    app.state.schedule_thread.start()
-    app.state.run_event_thread.start()
-    app.state.timeout_thread.start()
-    app.state.sla_thread.start()
-    app.state.backfill_thread.start()
+    global _orchestrator
+    ensure_admin_token()
+    ensure_domains_seeded()
+    if HYDRA_MODE == "api":
+        log.info(
+            "HYDRA_MODE=api: API service started without orchestration loops. "
+            "Run 'python -m scheduler.orchestrator_entrypoint' for the control-plane."
+        )
+    else:
+        log.info("HYDRA_MODE=%s: starting orchestration loops alongside API", HYDRA_MODE)
+        _orchestrator = create_standard_orchestrator()
+        _orchestrator.start()
 
 
 @app.on_event("shutdown")
 def on_shutdown():
-    log.info("Stopping scheduler background threads")
-    stop_event.set()
-    th1 = getattr(app.state, "scheduler_thread", None)
-    th2 = getattr(app.state, "failover_thread", None)
-    th3 = getattr(app.state, "schedule_thread", None)
-    th4 = getattr(app.state, "run_event_thread", None)
-    th5 = getattr(app.state, "timeout_thread", None)
-    th6 = getattr(app.state, "sla_thread", None)
-    th7 = getattr(app.state, "backfill_thread", None)
-    if th1:
-        th1.join(timeout=2)
-    if th2:
-        th2.join(timeout=2)
-    if th3:
-        th3.join(timeout=2)
-    if th4:
-        th4.join(timeout=2)
-    if th5:
-        th5.join(timeout=2)
-    if th6:
-        th6.join(timeout=2)
-    if th7:
-        th7.join(timeout=2)
+    if _orchestrator is not None:
+        log.info("Stopping orchestration loops")
+        _orchestrator.stop()
