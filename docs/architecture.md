@@ -70,7 +70,7 @@ flowchart TB
 
 ### Run Lifecycle Events
 5. Worker emits `run_start` and `run_end` events to `run_events:<domain>` in **Redis**.
-6. **Run Event Loop** (in scheduler) consumes those events and persists run documents to the `job_runs` collection in **MongoDB**.
+6. **Run Event Loop** (in scheduler) atomically stages each event via `RPOPLPUSH`, processes it, then removes it from the staging queue.  Run documents are persisted to the `job_runs` collection in **MongoDB**.  See [Run Lifecycle](#run-lifecycle) for full state-transition and idempotency semantics.
 
 ### Worker Coordination (Redis-only)
 - Workers write registration metadata and heartbeats to `workers:<domain>:<worker_id>` in **Redis**.
@@ -154,7 +154,59 @@ Workers maintain a persistent cache directory for source workspaces. Cache entri
 - **Git fast-update** (fetch + checkout instead of full clone on cache hit)
 - **Cache modes** per job: `auto` (default), `always`, `never`
 
-## Startup and Cold-Start Timing
+## Run Lifecycle
+
+### States
+
+| State | Meaning |
+|---|---|
+| `pending` | Job has been enqueued in `job_queue:<domain>:pending` but not yet dispatched to a worker. |
+| `dispatched` | Scheduler has pushed the job envelope to `job_queue:<domain>:<worker_id>`; the worker has not yet acknowledged execution start. |
+| `running` | Worker emitted `run_start`; execution is in progress. |
+| `success` | Worker emitted `run_end` with `status: success`. **Terminal.** |
+| `failed` | Worker emitted `run_end` with `status: failed`, or the failover/timeout loop marked the run as failed. **Terminal.** |
+| `timed_out` | Run exceeded its configured `timeout_seconds`; treated equivalently to failed for post-run actions. **Terminal.** |
+
+`success`, `failed`, and `timed_out` are **terminal states**: a run document must not transition out of a terminal state. Post-run actions (scheduler-level retries, on-failure webhooks, e-mail alerts, and dependent-job triggers) fire exactly once when a run first enters a terminal state.
+
+### State Transitions
+
+```
+pending → dispatched → running → success
+                               → failed
+                               → timed_out
+
+failed / timed_out → (re-enqueued as a new run with a fresh run_id)
+```
+
+Retries and failover always create a **new** run document with a new `run_id`.  The original run document is preserved in its terminal state so the full history of attempts is available in MongoDB.
+
+### Event Ingestion Semantics
+
+Run lifecycle events are emitted by workers to `run_events:<domain>` in Redis and consumed by the **Run Event Loop** in the scheduler, which persists them to `job_runs` in MongoDB.
+
+#### Idempotency guarantees
+
+- **`run_start`**: Uses MongoDB `$setOnInsert`, which is a no-op if the document already exists.  Duplicate or replayed `run_start` events are dropped without updating the document.  A `run_start` that arrives after `run_end` has already marked the run terminal is also silently ignored.
+- **`run_end`**: Guards against updating a document that is already in a terminal state.  Duplicate `run_end` events (including replays after scheduler restart) are detected and dropped before post-run actions can fire.
+
+#### Anomalous sequence handling
+
+| Scenario | Behaviour |
+|---|---|
+| Duplicate `run_start` | Logged at `WARNING`; no-op update (document unchanged, `append_worker_op` skipped). |
+| `run_start` after terminal `run_end` | Logged at `WARNING`; ignored — terminal state is preserved. |
+| Duplicate `run_end` (terminal state) | Logged at `WARNING`; entire `_handle_run_end` body skipped — post-run actions do not re-fire. |
+| `run_end` before `run_start` | Logged at `WARNING`; a minimal fallback run document is created so the run is visible in history. Post-run actions fire once for this fallback document. |
+| Concurrent insert on fallback | Handled via `DuplicateKeyError` catch; post-run actions are skipped if a concurrent `run_start` already committed the document in a terminal state. |
+
+#### Crash-safety (staging queue)
+
+The Run Event Loop uses Redis `RPOPLPUSH` to atomically move each event from `run_events:<domain>` to a per-domain staging queue `run_events:<domain>:processing` **before** processing it.  After successful (or unrecoverable) processing the event is removed from the staging queue with `LREM`.
+
+On scheduler startup, `_recover_staging_events()` scans all `run_events:*:processing` keys and moves any leftover events back to their source queues, ensuring events that were in-flight during a crash are re-delivered.  Because event handlers are idempotent, re-delivery is safe.
+
+
 
 Hydra instruments key stages of job execution so operators can observe where time is spent. The following timing fields are included in `run_end` events (and therefore persisted to MongoDB `job_runs`):
 

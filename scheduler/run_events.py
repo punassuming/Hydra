@@ -7,6 +7,9 @@ from datetime import datetime
 from email.message import EmailMessage
 from typing import Any, Dict
 
+from pymongo.errors import DuplicateKeyError
+
+from .models.job_run import TERMINAL_STATES
 from .mongo_client import get_db
 from .redis_client import get_redis
 from .utils.encryption import decrypt_payload
@@ -230,7 +233,32 @@ def _handle_run_start(payload: Dict[str, Any]):
         "completion_reason": None,
         "bypass_concurrency": bool(payload.get("bypass_concurrency", False)),
     }
-    db.job_runs.update_one({"_id": run_id}, {"$set": doc}, upsert=True)
+
+    # Idempotent insert: $setOnInsert is a no-op when the document already
+    # exists, preventing duplicate run_start events from overwriting fields
+    # (including terminal status values written by a preceding run_end).
+    result = db.job_runs.update_one(
+        {"_id": run_id},
+        {"$setOnInsert": doc},
+        upsert=True,
+    )
+
+    if result.matched_count > 0:
+        # Document already existed — this is a duplicate or replayed event.
+        existing = db.job_runs.find_one({"_id": run_id}, {"status": 1})
+        existing_status = (existing or {}).get("status", "unknown")
+        if existing_status in TERMINAL_STATES:
+            log.warning(
+                "Duplicate run_start for already-terminal run %s (status=%s, job=%s); ignoring",
+                run_id, existing_status, job_id,
+            )
+        else:
+            log.warning(
+                "Duplicate run_start for run %s (current status=%s, job=%s); ignoring",
+                run_id, existing_status, job_id,
+            )
+        return
+
     worker_id = payload.get("worker_id")
     domain = payload.get("domain", "prod")
     if worker_id:
@@ -256,7 +284,7 @@ def _handle_run_end(payload: Dict[str, Any]):
         return
 
     end_ts = _to_datetime(payload.get("end_ts")) or datetime.utcnow()
-    existing = db.job_runs.find_one({"_id": run_id}, {"start_ts": 1})
+    existing = db.job_runs.find_one({"_id": run_id}, {"start_ts": 1, "status": 1})
     start_ts = _to_datetime((existing or {}).get("start_ts")) or _to_datetime(payload.get("start_ts"))
     duration = (end_ts - start_ts).total_seconds() if start_ts else None
     status = payload.get("status", "failed")
@@ -270,33 +298,75 @@ def _handle_run_end(payload: Dict[str, Any]):
         "completion_reason": payload.get("completion_reason"),
         "duration": duration,
     }
-    res = db.job_runs.update_one({"_id": run_id}, {"$set": update_doc})
-    if res.matched_count == 0:
-        # Fallback: if start event was missed, create a minimal run doc.
-        db.job_runs.insert_one(
-            {
-                "_id": run_id,
-                "job_id": payload.get("job_id", ""),
-                "user": payload.get("user", ""),
-                "domain": payload.get("domain", "prod"),
-                "worker_id": payload.get("worker_id"),
-                "start_ts": _to_datetime(payload.get("start_ts")) or end_ts,
-                "scheduled_ts": _to_datetime(payload.get("scheduled_ts")) or end_ts,
-                **update_doc,
-                "slot": payload.get("slot"),
-                "retries_remaining": payload.get("retries_remaining"),
-                "schedule_tick": payload.get("schedule_tick"),
-                "schedule_mode": payload.get("schedule_mode"),
-                "executor_type": payload.get("executor_type"),
-                "queue_latency_ms": payload.get("queue_latency_ms"),
-                "bypass_concurrency": bool(payload.get("bypass_concurrency", False)),
-                "duration": duration,
-            }
-        )
 
     worker_id = payload.get("worker_id")
     domain = payload.get("domain", "prod")
     job_id = payload.get("job_id", "")
+
+    if existing is not None:
+        existing_status = existing.get("status", "unknown")
+        if existing_status in TERMINAL_STATES:
+            # Run is already terminal — this is a duplicate or replayed event.
+            # Do not re-apply the update or re-trigger post-run actions.
+            log.warning(
+                "Duplicate run_end for already-terminal run %s (status=%s → %s, job=%s); ignoring",
+                run_id, existing_status, status, job_id,
+            )
+            return
+
+        # Normal path: update a running/dispatched/pending run to terminal.
+        res = db.job_runs.update_one(
+            {"_id": run_id, "status": {"$nin": list(TERMINAL_STATES)}},
+            {"$set": update_doc},
+        )
+        if res.matched_count == 0:
+            # Race: another thread beat us to a terminal transition.
+            log.warning(
+                "run_end for run %s lost race to terminal transition (job=%s, status=%s); ignoring",
+                run_id, job_id, status,
+            )
+            return
+    else:
+        # run_end arrived before (or without) a persisted run_start.
+        # Create a minimal fallback document so the run is visible in history.
+        log.warning(
+            "run_end received before run_start for run %s (job=%s, status=%s); creating fallback doc",
+            run_id, job_id, status,
+        )
+        fallback_doc = {
+            "_id": run_id,
+            "job_id": job_id,
+            "user": payload.get("user", ""),
+            "domain": domain,
+            "worker_id": worker_id,
+            "start_ts": _to_datetime(payload.get("start_ts")) or end_ts,
+            "scheduled_ts": _to_datetime(payload.get("scheduled_ts")) or end_ts,
+            **update_doc,
+            "slot": payload.get("slot"),
+            "retries_remaining": payload.get("retries_remaining"),
+            "schedule_tick": payload.get("schedule_tick"),
+            "schedule_mode": payload.get("schedule_mode"),
+            "executor_type": payload.get("executor_type"),
+            "queue_latency_ms": payload.get("queue_latency_ms"),
+            "bypass_concurrency": bool(payload.get("bypass_concurrency", False)),
+            "duration": duration,
+        }
+        try:
+            db.job_runs.insert_one(fallback_doc)
+        except DuplicateKeyError:
+            # Concurrent insert (e.g. run_start arrived on another thread).
+            # Re-check terminal status before proceeding to post-run actions.
+            concurrent = db.job_runs.find_one({"_id": run_id}, {"status": 1})
+            if (concurrent or {}).get("status") in TERMINAL_STATES:
+                log.warning(
+                    "run_end fallback insert lost race for run %s (job=%s); skipping post-run actions",
+                    run_id, job_id,
+                )
+                return
+            db.job_runs.update_one(
+                {"_id": run_id, "status": {"$nin": list(TERMINAL_STATES)}},
+                {"$set": update_doc},
+            )
 
     if worker_id:
         append_worker_op(
@@ -434,23 +504,76 @@ def _handle_event(payload: Dict[str, Any]):
         _handle_artifact_emitted(payload)
 
 
+def _recover_staging_events(r) -> int:
+    """Move any events left in processing queues back to their source queues.
+
+    Called once on scheduler startup to recover events that were popped but
+    not fully processed before a previous crash.  Each recovered event is
+    pushed to the tail of its source queue so normal ordering is preserved.
+    Returns the number of events recovered.
+    """
+    recovered = 0
+    for staging_key in list(r.scan_iter("run_events:*:processing")):
+        domain = staging_key.split(":")[1]
+        src_key = f"run_events:{domain}"
+        while True:
+            raw = r.rpoplpush(staging_key, src_key)
+            if raw is None:
+                break
+            log.info(
+                "Recovered staged run event for domain '%s' back to %s",
+                domain, src_key,
+            )
+            recovered += 1
+    if recovered:
+        log.info("Recovered %d staged run event(s) after restart", recovered)
+    return recovered
+
+
 def run_event_loop(stop_event: threading.Event):
     r = get_redis()
+    # Recover any events that were in processing queues when the scheduler
+    # last stopped or crashed.  This prevents silent event loss on restart.
+    _recover_staging_events(r)
     log.info("Run event loop started")
     while not stop_event.is_set():
         try:
             domains = list(r.smembers("hydra:domains") or []) or ["prod"]
-            keys = [f"run_events:{d}" for d in domains]
-            popped = r.blpop(keys, timeout=2)
-            if not popped:
-                continue
-            key, raw = popped
-            try:
-                payload = json.loads(raw)
-            except Exception:
-                log.warning("Skipping malformed run event payload from %s", key)
-                continue
-            _handle_event(payload)
+            dispatched = False
+            for domain in domains:
+                src_key = f"run_events:{domain}"
+                staging_key = f"run_events:{domain}:processing"
+                # Atomically move one event from the source queue to the
+                # per-domain staging queue.  If the scheduler crashes after
+                # this point but before the LREM below, the event remains in
+                # the staging queue and will be recovered on the next startup
+                # by _recover_staging_events().
+                raw = r.rpoplpush(src_key, staging_key)
+                if raw is None:
+                    continue
+                try:
+                    payload = json.loads(raw)
+                except Exception:
+                    log.warning(
+                        "Skipping malformed run event payload from %s", src_key
+                    )
+                    r.lrem(staging_key, 1, raw)
+                    dispatched = True
+                    continue
+                try:
+                    _handle_event(payload)
+                except Exception as exc:
+                    log.exception("Error processing run event from %s: %s", src_key, exc)
+                finally:
+                    # Remove the successfully-consumed (or unprocessable) raw
+                    # event from the staging queue.  Event handlers are
+                    # idempotent, so a duplicate delivery on restart is safe.
+                    r.lrem(staging_key, 1, raw)
+                dispatched = True
+                break  # Process one event per loop tick; re-check all domains next tick
+            if not dispatched:
+                # No events across any domain — sleep briefly to avoid spin.
+                time.sleep(0.1)
         except Exception as exc:
             log.exception("Error in run event loop: %s", exc)
             time.sleep(1)
