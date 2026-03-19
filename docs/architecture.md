@@ -161,16 +161,136 @@ This lets operators and monitoring systems independently verify:
 - Operational events (dispatches, state changes, failovers) are logged to `worker_ops:<domain>:<worker_id>` in **Redis**.
 - Workers **never connect to MongoDB**.
 
+## Job Run State Machine
+
+Each job run moves through the following states. The transitions are explicit so operators and developers can reason about where a job is and what happened to it.
+
+```
+                ┌─ cron/interval trigger
+                │  or POST /jobs/{id}/run
+                ▼
+         [ pending ]  ◄─── failover_requeue / no_worker requeue
+                │
+                │ scheduling_loop: eligible worker found
+                ▼
+        [ dispatched ]  ← envelope in job_queue:<domain>:<worker_id>
+                │
+                │ worker BLPOP + run_start event
+                ▼
+         [ running ]   ← job_running:<domain>:<job_id> + worker_running_set
+                │
+         ┌──────┼──────┐
+         ▼      ▼      ▼
+    [success] [failed] [timed_out]
+```
+
+### State definitions
+
+| State | Redis keys present | MongoDB run status | How it ends |
+|---|---|---|---|
+| **pending** | `job_queue:<domain>:pending` entry | — (no run doc yet) | Worker found → dispatched; or removed |
+| **dispatched** | `job_queue:<domain>:<worker_id>` envelope | — (no run doc yet) | Worker BLPOP → running; or failover → pending |
+| **running** | `job_running:<domain>:<job_id>`, `worker_running_set` entry | `running` | Job completes/fails → success/failed/timed_out |
+| **timed_out** | none (cleared on timeout kill) | `failed` (timeout) | Timeout enforcement sends kill signal |
+| **orphaned / failover-eligible** | Running keys present, heartbeat expired | `running` → updated to `failed` on requeue | `failover_loop` detects heartbeat expiry → requeue |
+| **requeued** | Back in `job_queue:<domain>:pending` | Prior run marked `failed` | Next dispatch cycle picks it up |
+
+### Requeue metadata
+
+Every job in the pending queue has an associated `job_enqueue_meta:<domain>:<job_id>` hash with:
+- `enqueued_ts` — Unix timestamp when this queue entry was created.
+- `reason` — Why this job entered (or re-entered) the queue: `immediate`, `schedule`, `retry`, `failover_requeue`, `no_worker`, `worker_detached`, etc.
+- `retry_attempt` — Retry counter (incremented by the worker on retry).
+- `no_worker_count` — How many times the dispatch loop has found no eligible worker for this job. Used for starvation detection and surfaced in queue/pressure APIs.
+
+### No-worker starvation detection
+
+When the dispatch loop pops a job from the pending queue but finds no eligible worker (no matching affinity, all workers at capacity, etc.), it:
+1. Increments `no_worker_count` in the job's enqueue metadata.
+2. Re-adds the job to the pending queue at its original priority.
+3. Emits a `job_pending` event with `reason: "no_worker"` and the current `no_worker_count`.
+4. Logs a **starvation warning** when `no_worker_count` reaches `SCHEDULER_STARVATION_WARN_THRESHOLD` (default: 5), and again at each subsequent multiple of that threshold.
+
+Operators can observe starvation via:
+- `GET /overview/queue` — each pending item includes `no_worker_count`.
+- `GET /overview/pressure` — per-domain `stalled_count` and `max_no_worker_count`.
+- Scheduler logs (warning level).
+
+## Failover Semantics
+
+### Trigger conditions
+The `failover_loop` fires every 2 seconds. It calls `failover_once()` which scans all `worker_heartbeats:<domain>` sorted sets for workers whose last heartbeat is older than `SCHEDULER_HEARTBEAT_TTL` seconds.
+
+### Failover actions
+When a worker is detected offline:
+
+1. **Running jobs** — jobs in `worker_running_set:<domain>:<worker_id>` had their `run_start` event emitted. Failover marks any open MongoDB run document as `failed` with `completion_reason: "worker offline; job requeued"`, clears the `job_running` key, and returns the job to the domain pending queue.
+
+2. **Dispatched-but-not-started jobs** — envelopes in `job_queue:<domain>:<worker_id>` were pushed by the scheduler but not yet consumed by the worker. Failover drains the entire per-worker queue and returns these envelopes to the domain pending queue, preserving their original priority and retry state. Without this step, these jobs would be silently lost.
+
+3. **Worker state** — the worker's `current_running` counter is reset to 0 and its status is set to `offline`.
+
+### Duplicate-execution protection
+A `worker_failover_handled:<domain>:<worker_id>` key (TTL = `max(10, ttl * 2)` seconds) prevents the failover loop from processing the same offline worker repeatedly within the TTL window. The key is set with `NX` (set-if-not-exists), so only the first observation triggers recovery.
+
+### Stale worker pruning
+If a worker has been offline for more than `SCHEDULER_WORKER_OFFLINE_PRUNE_SECONDS` (default: 1800s) *and* its running set and worker queue are both empty, the scheduler removes its registry keys from Redis. The operational timeline (`worker_ops`) is preserved for post-mortem inspection.
+
+## Backpressure and Queue Visibility
+
+### API endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET /overview/queue` | Domain-scoped pending queue items (first N, sorted by priority/enqueue time). Each item includes `no_worker_count` and the response includes `pending_total` per domain. |
+| `GET /overview/pressure` | Per-domain backpressure summary: pending depth, stalled/starvation counts, per-worker dispatch queue depths, online worker count, total running vs capacity. |
+
+### `GET /overview/pressure` fields
+
+| Field | Description |
+|---|---|
+| `pending_total` | Total jobs in the domain pending queue (not page-limited). |
+| `stalled_count` | Jobs with `no_worker_count ≥ starvation_threshold`. |
+| `stalled_jobs` | Job IDs of stalled jobs. |
+| `max_no_worker_count` | Highest `no_worker_count` across pending jobs. |
+| `starvation_threshold` | Configured starvation threshold (`SCHEDULER_STARVATION_WARN_THRESHOLD`). |
+| `worker_queue_depths` | Per-worker depth of dispatched-but-not-started queues. |
+| `total_worker_queue_depth` | Sum of all per-worker queue depths. |
+| `online_workers` | Number of workers currently heartbeating (state=online). |
+| `total_running` | Sum of `current_running` across online workers. |
+| `total_capacity` | Sum of `max_concurrency` across online workers. |
+
+## `bypass_concurrency`
+
+Jobs with `bypass_concurrency: true` skip the normal capacity check during worker selection. This is intended for time-critical or operational override jobs that must run immediately regardless of worker load.
+
+### Guardrails and observability
+
+- **Dispatch-time warning**: When a `bypass_concurrency` job is dispatched to a worker already at or above its normal `max_concurrency`, the scheduler logs a warning identifying the worker and its current load. This is logged at every bypass dispatch to an overloaded worker.
+
+- **Configurable soft cap** (`SCHEDULER_BYPASS_MAX_EXTRA`, default: `0` = unlimited): When set to a positive integer, the scheduler filters out workers that already have more than that many bypass jobs running above their normal capacity. For example, `SCHEDULER_BYPASS_MAX_EXTRA=2` means no worker will receive more than 2 bypass jobs above its `max_concurrency`. If all workers exceed the cap, the job is requeued like a no-worker miss.
+
+- **Dispatch operation log**: Every dispatch records `bypass_concurrency` in the `worker_ops` operational event, so the Gantt/timeline UI and operation history reflect bypass usage.
+
+### Configuration
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `SCHEDULER_STARVATION_WARN_THRESHOLD` | `5` | Log a starvation warning after this many no-worker misses for a single job. |
+| `SCHEDULER_BYPASS_MAX_EXTRA` | `0` (unlimited) | Maximum bypass jobs per worker above its normal concurrency cap. `0` disables the cap. |
+
 ## Redis Key Layout
 
 | Key Pattern | Owner | Purpose |
 |---|---|---|
-| `job_queue:<domain>:pending` | Scheduler (write) / Scheduler (read) | Pending jobs waiting for dispatch |
-| `job_queue:<domain>:<worker_id>` | Scheduler (write) / Worker (read) | Per-worker dispatch queue |
+| `job_queue:<domain>:pending` | Scheduler (write) / Scheduler (read) | Pending jobs waiting for dispatch (sorted set, score = priority) |
+| `job_queue:<domain>:<worker_id>` | Scheduler (write) / Worker (read) | Per-worker dispatch queue (list of job envelopes) |
+| `job_enqueue_meta:<domain>:<job_id>` | Scheduler | Metadata for each pending job: `enqueued_ts`, `reason`, `retry_attempt`, `no_worker_count` |
 | `workers:<domain>:<worker_id>` | Worker | Registration metadata + heartbeat |
-| `worker_heartbeats:<domain>` | Worker | Heartbeat timestamps |
+| `worker_heartbeats:<domain>` | Worker | Heartbeat timestamps (sorted set) |
 | `worker_running_set:<domain>:<worker_id>` | Worker | Set of currently running job IDs |
-| `job_running:<domain>:<job_id>` | Worker | Concurrency lock per job |
+| `job_running:<domain>:<job_id>` | Worker | Concurrency lock per job (run_id + heartbeat ts) |
+| `worker_failover_handled:<domain>:<worker_id>` | Scheduler | Prevents repeated failover processing of the same offline worker within TTL window |
 | `worker_metrics:<domain>:<worker_id>:history` | Worker | Rolling metrics history |
 | `run_events:<domain>` | Worker (write) / Scheduler (read) | Run lifecycle event stream |
 | `worker_ops:<domain>:<worker_id>` | Worker | Operational event log |

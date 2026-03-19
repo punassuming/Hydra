@@ -1,6 +1,7 @@
 from datetime import datetime, date, timedelta
 from typing import List, Dict, Any, Optional
 import json
+import os
 import time
 
 from fastapi import APIRouter, HTTPException, Request, Body
@@ -573,7 +574,10 @@ def queue_overview(request: Request):
     else:
         pending_domains = [domain]
 
+    # Track total pending count per domain (before the page limit is applied).
+    pending_total: Dict[str, int] = {}
     for pending_domain in pending_domains:
+        pending_total[pending_domain] = int(r.zcard(f"job_queue:{pending_domain}:pending") or 0)
         items = r.zrange(f"job_queue:{pending_domain}:pending", 0, pending_limit - 1, withscores=True) or []
         for job_id, score in items:
             job = jobs_by_id.get(job_id)
@@ -593,6 +597,7 @@ def queue_overview(request: Request):
                     "queue_score": score,
                     "enqueued_ts": _serialize_ts(datetime.utcfromtimestamp(float(enqueued_ts))) if enqueued_ts else None,
                     "reason": meta.get("reason"),
+                    "no_worker_count": int(meta.get("no_worker_count", 0)),
                 }
             )
 
@@ -625,7 +630,111 @@ def queue_overview(request: Request):
     upcoming.sort(key=lambda item: item.get("next_run_at") or "")
     upcoming = upcoming[:upcoming_limit]
 
-    return {"pending": pending, "upcoming": upcoming}
+    return {"pending": pending, "upcoming": upcoming, "pending_total": pending_total}
+
+
+@router.get("/overview/pressure")
+def queue_pressure(request: Request):
+    """Return per-domain backpressure indicators.
+
+    Provides operational visibility into queue depth, starvation, and
+    worker capacity so operators can detect and diagnose dispatch pressure
+    without needing Redis access.
+
+    Fields per domain:
+    - ``pending_total``: total jobs in the pending queue.
+    - ``stalled_jobs``: jobs with ``no_worker_count`` >= starvation threshold.
+    - ``max_no_worker_count``: highest ``no_worker_count`` across all pending jobs.
+    - ``worker_queue_depths``: per-worker depth of dispatched-but-not-started queues.
+    - ``total_worker_queue_depth``: sum of all per-worker queue depths.
+    - ``online_workers``: number of workers currently heartbeating.
+    - ``total_running``: sum of ``current_running`` across online workers.
+    - ``total_capacity``: sum of ``max_concurrency`` across online workers.
+    """
+    r = get_redis()
+    domain = getattr(request.state, "domain", "prod")
+    is_admin = getattr(request.state, "is_admin", False)
+    force_domain = request.query_params.get("domain")
+    starvation_threshold = int(os.getenv("SCHEDULER_STARVATION_WARN_THRESHOLD", "5"))
+    ttl = max(2, int(os.getenv("SCHEDULER_HEARTBEAT_TTL", "10")))
+
+    if is_admin and not force_domain:
+        known_domains = sorted(set(r.smembers("hydra:domains") or []) | {"prod"})
+    else:
+        known_domains = [force_domain or domain]
+
+    results: List[Dict[str, Any]] = []
+    now = time.time()
+    for dom in known_domains:
+        # Pending backlog
+        pending_total = int(r.zcard(f"job_queue:{dom}:pending") or 0)
+
+        # Walk pending items to find stalled jobs (no_worker_count >= threshold)
+        stalled_jobs: List[str] = []
+        max_no_worker_count = 0
+        if pending_total > 0:
+            all_pending = r.zrange(f"job_queue:{dom}:pending", 0, -1) or []
+            for job_id in all_pending:
+                meta = r.hgetall(f"job_enqueue_meta:{dom}:{job_id}") or {}
+                nwc = int(meta.get("no_worker_count", 0))
+                if nwc > max_no_worker_count:
+                    max_no_worker_count = nwc
+                if nwc >= starvation_threshold:
+                    stalled_jobs.append(job_id)
+
+        # Per-worker queue depths (dispatched-but-not-started).
+        # Keys match job_queue:<dom>:<worker_id>; skip the domain pending queue.
+        worker_queue_depths: Dict[str, int] = {}
+        expected_prefix = f"job_queue:{dom}:"
+        for key in r.scan_iter(f"job_queue:{dom}:*"):
+            if not key.startswith(expected_prefix):
+                continue
+            suffix = key[len(expected_prefix):]
+            if not suffix or suffix == "pending":
+                continue
+            depth = int(r.llen(key) or 0)
+            if depth > 0:
+                worker_queue_depths[suffix] = depth
+        total_worker_queue_depth = sum(worker_queue_depths.values())
+
+        # Online worker capacity
+        online_workers = 0
+        total_running = 0
+        total_capacity = 0
+        expected_worker_prefix = f"workers:{dom}:"
+        for wkey in r.scan_iter(f"workers:{dom}:*"):
+            if not wkey.startswith(expected_worker_prefix):
+                continue
+            wid = wkey[len(expected_worker_prefix):]
+            if not wid:
+                continue
+            hb = r.zscore(f"worker_heartbeats:{dom}", wid) or 0
+            if (now - hb) > ttl:
+                continue
+            wdata = r.hgetall(wkey) or {}
+            if (wdata.get("state") or "online") != "online":
+                continue
+            online_workers += 1
+            total_running += int(wdata.get("current_running", 0))
+            total_capacity += int(wdata.get("max_concurrency", 1))
+
+        results.append(
+            {
+                "domain": dom,
+                "pending_total": pending_total,
+                "stalled_jobs": stalled_jobs,
+                "stalled_count": len(stalled_jobs),
+                "max_no_worker_count": max_no_worker_count,
+                "starvation_threshold": starvation_threshold,
+                "worker_queue_depths": worker_queue_depths,
+                "total_worker_queue_depth": total_worker_queue_depth,
+                "online_workers": online_workers,
+                "total_running": total_running,
+                "total_capacity": total_capacity,
+            }
+        )
+
+    return {"domains": results}
 
 
 def _build_dependency_graph(

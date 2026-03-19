@@ -15,6 +15,7 @@ import {
   WorkerOperationsData,
   SourceConfig,
   QueueOverview,
+  QueuePressure,
 } from "../types";
 
 export interface JobPayload {
@@ -68,6 +69,7 @@ export const detachWorker = (workerId: string, force = false) =>
 export const fetchJobRuns = (jobId: string) => apiClient.get<JobRun[]>(`/jobs/${jobId}/runs`);
 export const fetchJobOverview = () => apiClient.get<JobOverview[]>("/overview/jobs");
 export const fetchQueueOverview = () => apiClient.get<QueueOverview>("/overview/queue");
+export const fetchQueuePressure = () => apiClient.get<QueuePressure>("/overview/pressure");
 export const fetchJobStatistics = () => apiClient.get<JobStatistics>("/overview/statistics");
 export const fetchHistory = () => apiClient.get<JobRun[]>("/history/");
 export const fetchJobGrid = (jobId: string) => apiClient.get<JobGridData>(`/jobs/${jobId}/grid`);

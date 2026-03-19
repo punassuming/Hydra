@@ -227,6 +227,12 @@ def scheduling_loop(stop_event: threading.Event):
     r = get_redis()
     db = get_db()
     ttl = int(os.getenv("SCHEDULER_HEARTBEAT_TTL", "10"))
+    # After this many consecutive no-worker cycles for a single job, log a
+    # starvation warning so operators know the job is blocked.
+    starvation_warn_threshold = int(os.getenv("SCHEDULER_STARVATION_WARN_THRESHOLD", "5"))
+    # Hard cap on how many bypass_concurrency jobs a single worker may carry
+    # above its normal max_concurrency.  0 means no cap (default: no cap).
+    bypass_max_extra = int(os.getenv("SCHEDULER_BYPASS_MAX_EXTRA", "0"))
     log.info("Scheduling loop started (heartbeat TTL=%ss)", ttl)
     while not stop_event.is_set():
         try:
@@ -248,6 +254,8 @@ def scheduling_loop(stop_event: threading.Event):
             enqueued_ts = float(meta.get("enqueued_ts", time.time()))
             enqueue_reason = meta.get("reason")
             retry_attempt = int(meta.get("retry_attempt", 0))
+            no_worker_count = int(meta.get("no_worker_count", 0))
+            params_raw = meta.get("params")
             r.delete(meta_key)
 
             # Sensor jobs are dispatched through the normal worker path.
@@ -258,26 +266,72 @@ def scheduling_loop(stop_event: threading.Event):
                 for w in list_online_workers(ttl, domain, respect_capacity=not bypass_concurrency)
                 if passes_affinity(job, w)
             ]
+
+            # bypass_concurrency guardrail: if a per-worker extra-bypass cap is
+            # configured, exclude workers that already have too many bypass jobs
+            # running above their normal capacity limit.
+            if bypass_concurrency and bypass_max_extra > 0:
+                filtered = []
+                for w in candidates:
+                    extra = max(0, int(w.get("current_running", 0)) - int(w.get("max_concurrency", 1)))
+                    if extra < bypass_max_extra:
+                        filtered.append(w)
+                    else:
+                        log.warning(
+                            "Worker %s has %d bypass job(s) running (cap=%d); skipping for bypass job %s",
+                            w["worker_id"], extra, bypass_max_extra, job_id,
+                        )
+                candidates = filtered
+
             worker = select_best_worker(candidates)
             if not worker:
-                # No worker matches; requeue and backoff
-                log.warning("No eligible worker for job %s; requeuing", job_id)
+                # No worker matches; requeue and backoff.
+                no_worker_count += 1
+                if no_worker_count == starvation_warn_threshold:
+                    log.warning(
+                        "Job %s has been waiting for an eligible worker %d time(s) "
+                        "(starvation risk; bypass_concurrency=%s)",
+                        job_id, no_worker_count, bypass_concurrency,
+                    )
+                elif no_worker_count > starvation_warn_threshold and no_worker_count % starvation_warn_threshold == 0:
+                    log.warning(
+                        "Job %s still waiting for eligible worker after %d attempt(s)",
+                        job_id, no_worker_count,
+                    )
+                else:
+                    log.warning("No eligible worker for job %s; requeuing (no_worker_count=%d)", job_id, no_worker_count)
                 r.zadd(f"job_queue:{domain}:pending", {job_id: float(job.get("priority", 5))})
-                r.hset(
-                    meta_key,
-                    mapping={
-                        "enqueued_ts": enqueued_ts,
-                        "reason": enqueue_reason or "no_worker",
-                    },
-                )
+                new_meta: dict = {
+                    "enqueued_ts": enqueued_ts,
+                    "reason": enqueue_reason or "no_worker",
+                    "no_worker_count": no_worker_count,
+                }
+                if params_raw:
+                    new_meta["params"] = params_raw
+                r.hset(meta_key, mapping=new_meta)
                 r.expire(meta_key, 24 * 3600)
-                event_bus.publish("job_pending", {"job_id": job_id, "reason": "no_worker", "domain": domain})
+                event_bus.publish(
+                    "job_pending",
+                    {"job_id": job_id, "reason": "no_worker", "domain": domain, "no_worker_count": no_worker_count},
+                )
                 time.sleep(1)
                 continue
             wid = worker["worker_id"]
             dispatched_job = _resolve_credential_refs(job, db)
-            params_raw = meta.get("params")
             params = json.loads(params_raw) if params_raw else {}
+
+            # Warn when dispatching a bypass_concurrency job to a worker that is
+            # already at or above its normal concurrency limit.
+            if bypass_concurrency:
+                current = int(worker.get("current_running", 0))
+                cap = int(worker.get("max_concurrency", 1))
+                if current >= cap:
+                    log.warning(
+                        "Dispatching bypass_concurrency job %s to worker %s which is already at capacity "
+                        "(%d/%d); this may overload the worker",
+                        job_id, wid, current, cap,
+                    )
+
             envelope = {
                 "job_id": job_id,
                 "domain": domain,
@@ -298,6 +352,7 @@ def scheduling_loop(stop_event: threading.Event):
                     "job_id": job_id,
                     "bypass_concurrency": bypass_concurrency,
                     "enqueue_reason": enqueue_reason,
+                    "no_worker_count": no_worker_count,
                 },
             )
             # Mark a pending run exists (worker updates on start)

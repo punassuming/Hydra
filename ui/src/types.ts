@@ -210,11 +210,31 @@ export interface QueueJobItem {
   queue_score?: number;
   enqueued_ts?: string | null;
   reason?: string;
+  no_worker_count?: number;
 }
 
 export interface QueueOverview {
   pending: QueueJobItem[];
   upcoming: QueueJobItem[];
+  pending_total?: Record<string, number>;
+}
+
+export interface DomainPressure {
+  domain: string;
+  pending_total: number;
+  stalled_jobs: string[];
+  stalled_count: number;
+  max_no_worker_count: number;
+  starvation_threshold: number;
+  worker_queue_depths: Record<string, number>;
+  total_worker_queue_depth: number;
+  online_workers: number;
+  total_running: number;
+  total_capacity: number;
+}
+
+export interface QueuePressure {
+  domains: DomainPressure[];
 }
 
 export interface JobGridTaskInstance {

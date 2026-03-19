@@ -755,3 +755,275 @@ def test_sensor_dispatch_goes_through_normal_worker_path():
     assert not hasattr(sched_mod, "sensor_evaluation_loop"), (
         "sensor_evaluation_loop should be removed; sensor execution happens on workers"
     )
+
+
+# ---------------------------------------------------------------------------
+# Dispatch / Failover / Backpressure tests
+# ---------------------------------------------------------------------------
+
+def test_failover_drains_worker_queue():
+    """requeue_jobs_for_worker recovers both running jobs AND dispatched-but-not-started
+    envelopes from the per-worker dispatch queue."""
+    import json
+    import time
+    from unittest.mock import MagicMock, patch, call
+    from scheduler.utils.failover import requeue_jobs_for_worker
+
+    mock_r = MagicMock()
+    mock_db = MagicMock()
+
+    # Running jobs in worker_running_set
+    running_job_id = "job-running-1"
+    mock_r.smembers.return_value = {running_job_id}
+    mock_r.hgetall.side_effect = lambda key: (
+        {"run_id": "run-abc"} if "job_running:" in key else {"current_running": "1"}
+    )
+
+    # Dispatched-but-not-started envelope in per-worker queue
+    queued_job_id = "job-queued-1"
+    queued_envelope = json.dumps({
+        "job_id": queued_job_id,
+        "enqueued_ts": time.time(),
+        "retry_attempt": 0,
+        "job": {"priority": 7},
+    })
+    mock_r.lrange.return_value = [queued_envelope]
+
+    with patch("scheduler.utils.failover.get_redis", return_value=mock_r), \
+         patch("scheduler.utils.failover.get_db", return_value=mock_db), \
+         patch("scheduler.utils.failover.append_worker_op"), \
+         patch("scheduler.utils.failover.event_bus"):
+        requeue_jobs_for_worker("prod:worker-a")
+
+    # Running job should be requeued with score 5
+    zadd_calls = mock_r.zadd.call_args_list
+    requeued_ids = {}
+    for c in zadd_calls:
+        requeued_ids.update(c.args[1] if c.args else c.kwargs.get("mapping", {}))
+    assert running_job_id in requeued_ids
+    assert queued_job_id in requeued_ids
+
+    # Per-worker queue should be deleted after drain
+    mock_r.delete.assert_any_call("job_queue:prod:worker-a")
+
+
+def test_failover_drains_queue_empty_running_set():
+    """requeue_jobs_for_worker still drains the per-worker queue even when
+    worker_running_set is empty (no already-started jobs)."""
+    import json
+    import time
+    from unittest.mock import MagicMock, patch
+    from scheduler.utils.failover import requeue_jobs_for_worker
+
+    mock_r = MagicMock()
+    mock_db = MagicMock()
+
+    # No running jobs
+    mock_r.smembers.return_value = set()
+
+    # One envelope dispatched but not yet consumed
+    queued_job_id = "job-q-only"
+    queued_envelope = json.dumps({
+        "job_id": queued_job_id,
+        "enqueued_ts": time.time(),
+        "retry_attempt": 1,
+        "job": {"priority": 3},
+    })
+    mock_r.lrange.return_value = [queued_envelope]
+    mock_r.hgetall.return_value = {"current_running": "0"}
+
+    with patch("scheduler.utils.failover.get_redis", return_value=mock_r), \
+         patch("scheduler.utils.failover.get_db", return_value=mock_db), \
+         patch("scheduler.utils.failover.append_worker_op"), \
+         patch("scheduler.utils.failover.event_bus"):
+        requeue_jobs_for_worker("prod:worker-b")
+
+    zadd_calls = mock_r.zadd.call_args_list
+    requeued_ids = {}
+    for c in zadd_calls:
+        requeued_ids.update(c.args[1] if c.args else {})
+    assert queued_job_id in requeued_ids
+    mock_r.delete.assert_any_call("job_queue:prod:worker-b")
+
+
+def test_no_worker_count_increments_on_miss():
+    """scheduling_loop increments no_worker_count each time no eligible worker is found."""
+    import json
+    import time
+    import threading
+    from unittest.mock import MagicMock, patch
+    from scheduler.scheduler import scheduling_loop
+
+    mock_r = MagicMock()
+    mock_db = MagicMock()
+
+    job_id = "job-stalled"
+    job_doc = {"_id": job_id, "domain": "prod", "priority": 5, "bypass_concurrency": False}
+    mock_db.job_definitions.find_one.return_value = job_doc
+
+    # First pop: job_id with existing no_worker_count=2
+    mock_r.smembers.return_value = ["prod"]
+    mock_r.bzpopmax.side_effect = [
+        (f"job_queue:prod:pending", job_id, 5.0),
+        None,  # stop after second iteration
+    ]
+    mock_r.hgetall.return_value = {
+        "enqueued_ts": str(time.time()),
+        "reason": "no_worker",
+        "no_worker_count": "2",
+    }
+    # No eligible workers
+    mock_r.scan_iter.return_value = []
+
+    stop = threading.Event()
+
+    # Run two iterations then stop
+    call_count = [0]
+    original_bzpopmax = mock_r.bzpopmax.side_effect
+
+    def controlled_bzpopmax(keys, timeout):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return (f"job_queue:prod:pending", job_id, 5.0)
+        stop.set()
+        return None
+
+    mock_r.bzpopmax.side_effect = controlled_bzpopmax
+
+    with patch("scheduler.scheduler.get_redis", return_value=mock_r), \
+         patch("scheduler.scheduler.get_db", return_value=mock_db), \
+         patch("scheduler.scheduler.list_online_workers", return_value=[]), \
+         patch("scheduler.scheduler.event_bus"):
+        scheduling_loop(stop)
+
+    # Verify no_worker_count was incremented (from 2 to 3)
+    hset_calls = mock_r.hset.call_args_list
+    assert hset_calls, "expected at least one hset call for meta"
+    # Find the meta hset call
+    meta_hset = None
+    for c in hset_calls:
+        mapping = c.kwargs.get("mapping") or (c.args[1] if len(c.args) > 1 else {})
+        if "no_worker_count" in (mapping or {}):
+            meta_hset = mapping
+            break
+    assert meta_hset is not None, "no_worker_count should be persisted in meta"
+    assert int(meta_hset["no_worker_count"]) == 3
+
+
+def test_no_worker_count_in_queue_overview():
+    """queue_overview includes no_worker_count in each pending item."""
+    from unittest.mock import MagicMock, patch
+    from fastapi import Request
+    from scheduler.api.jobs import queue_overview
+
+    mock_db = MagicMock()
+    mock_r = MagicMock()
+
+    job_id = "job-stalled-x"
+    mock_db.job_definitions.find.return_value = [{"_id": job_id, "name": "Stalled", "domain": "prod"}]
+    mock_r.smembers.return_value = set()
+    mock_r.zcard.return_value = 1
+    mock_r.zrange.return_value = [(job_id, 5.0)]
+    mock_r.hgetall.return_value = {
+        "enqueued_ts": "1700000000",
+        "reason": "no_worker",
+        "no_worker_count": "7",
+    }
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.state.domain = "prod"
+    mock_request.state.is_admin = False
+    mock_request.query_params = {}
+
+    with patch("scheduler.api.jobs.get_db", return_value=mock_db), \
+         patch("scheduler.api.jobs.get_redis", return_value=mock_r):
+        result = queue_overview(mock_request)
+
+    assert result["pending"]
+    item = result["pending"][0]
+    assert item["no_worker_count"] == 7
+
+
+def test_queue_overview_includes_pending_total():
+    """queue_overview includes pending_total per domain in the response."""
+    from unittest.mock import MagicMock, patch
+    from fastapi import Request
+    from scheduler.api.jobs import queue_overview
+
+    mock_db = MagicMock()
+    mock_r = MagicMock()
+
+    mock_db.job_definitions.find.return_value = []
+    mock_r.smembers.return_value = set()
+    mock_r.zcard.return_value = 42
+    mock_r.zrange.return_value = []
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.state.domain = "prod"
+    mock_request.state.is_admin = False
+    mock_request.query_params = {}
+
+    with patch("scheduler.api.jobs.get_db", return_value=mock_db), \
+         patch("scheduler.api.jobs.get_redis", return_value=mock_r):
+        result = queue_overview(mock_request)
+
+    assert "pending_total" in result
+    assert result["pending_total"].get("prod") == 42
+
+
+def test_bypass_concurrency_guardrail_filters_overloaded_worker():
+    """When SCHEDULER_BYPASS_MAX_EXTRA is set, dispatch skips workers that already
+    have too many bypass jobs above their normal capacity."""
+    import os
+    import threading
+    import time
+    from unittest.mock import MagicMock, patch
+    from scheduler.scheduler import scheduling_loop
+
+    mock_r = MagicMock()
+    mock_db = MagicMock()
+
+    job_id = "job-bypass"
+    job_doc = {"_id": job_id, "domain": "prod", "priority": 5, "bypass_concurrency": True}
+    mock_db.job_definitions.find_one.return_value = job_doc
+    mock_r.smembers.return_value = ["prod"]
+    mock_r.hgetall.return_value = {"enqueued_ts": str(time.time()), "reason": "immediate", "no_worker_count": "0"}
+
+    stop = threading.Event()
+    call_count = [0]
+
+    def controlled_bzpopmax(keys, timeout):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return (f"job_queue:prod:pending", job_id, 5.0)
+        stop.set()
+        return None
+
+    mock_r.bzpopmax.side_effect = controlled_bzpopmax
+
+    # Worker is at capacity 2/2 and has 1 extra bypass job (current_running=3)
+    overloaded_worker = {
+        "worker_id": "wkr-1",
+        "os": "linux",
+        "tags": [],
+        "allowed_users": [],
+        "max_concurrency": 2,
+        "current_running": 3,  # 1 extra bypass already
+        "hostname": "",
+        "ip": "",
+        "subnet": "",
+        "deployment_type": "",
+        "state": "online",
+        "capabilities": [],
+    }
+
+    with patch("scheduler.scheduler.get_redis", return_value=mock_r), \
+         patch("scheduler.scheduler.get_db", return_value=mock_db), \
+         patch("scheduler.scheduler.list_online_workers", return_value=[overloaded_worker]), \
+         patch("scheduler.scheduler.event_bus"), \
+         patch.dict(os.environ, {"SCHEDULER_BYPASS_MAX_EXTRA": "1"}):
+        scheduling_loop(stop)
+
+    # With cap=1 extra, the overloaded worker (already has 1 extra) should be filtered out.
+    # No dispatch should happen.
+    mock_r.rpush.assert_not_called()

@@ -40,7 +40,8 @@ Hydra Jobs is a distributed job runner designed for flexibility and scalability.
   - `GET /workers/{worker_id}/timeline` for per-worker execution spans (for Gantt/timeline UI).
   - `GET /workers/{worker_id}/operations` for operational timeline events (start/restart/dispatch/run lifecycle/state changes/failover).
   - `POST /workers/{worker_id}/state` with JSON body `{ "state": "online|draining|offline" }` (`disabled` accepted as legacy alias).
-  - `GET /overview/queue` for domain-scoped `pending` queue rows and `upcoming` scheduled jobs (supports `pending_limit`/`upcoming_limit`).
+  - `GET /overview/queue` for domain-scoped `pending` queue rows and `upcoming` scheduled jobs (supports `pending_limit`/`upcoming_limit`). Each pending item includes `no_worker_count`; response includes `pending_total` per domain.
+  - `GET /overview/pressure` for per-domain backpressure summary: pending depth, stalled/starvation counts, per-worker dispatch queue depths, online worker count, total running vs capacity.
   - `POST /workers/{worker_id}/detach` to remove an offline worker record from Redis registry (optionally `?force=true`), requeuing worker-queue envelopes back to domain pending queue.
 - Scheduler domain self-service APIs (domain token or admin token scoped by `domain`):
   - `GET /domain/settings`, `PUT /domain/settings`
@@ -51,7 +52,9 @@ Hydra Jobs is a distributed job runner designed for flexibility and scalability.
 - Worker (`worker/`) registers itself in Redis with tags/allowed users/domain token hash, heartbeats every 2s, BLPOPs its queue, tracks `current_running`/`worker_running_set`, streams logs to Redis (per-domain channels), emits run events to `run_events:<domain>`, and records worker operations to `worker_ops:<domain>:<worker_id>`.
 - Worker no longer mutates global domain registry keys; worker Redis writes are domain-scoped to heartbeat/status/queue/log keys.
 - Worker heartbeat stores rolling metrics in Redis (`worker_metrics:<domain>:<worker_id>:history`) including `memory_rss_mb`, `process_count`, and Linux load averages.
-- Jobs support `bypass_concurrency`; scheduler can dispatch these even when workers are at quota, and workers execute them outside normal `ThreadPoolExecutor` limits.
+- Jobs support `bypass_concurrency`; scheduler can dispatch these even when workers are at quota, and workers execute them outside normal `ThreadPoolExecutor` limits. The scheduler logs a warning when dispatching a bypass job to an overloaded worker. A soft cap (`SCHEDULER_BYPASS_MAX_EXTRA`) can limit how many bypass jobs each worker carries above its normal concurrency limit.
+- **No-worker starvation tracking**: `job_enqueue_meta:<domain>:<job_id>` records `no_worker_count` (incremented each time a job is requeued due to no eligible worker). A starvation warning is logged when `no_worker_count` reaches `SCHEDULER_STARVATION_WARN_THRESHOLD` (default 5). The count is visible in `/overview/queue` and `/overview/pressure`.
+- **Failover drains per-worker queue**: `failover_loop` / `requeue_jobs_for_worker` now recovers both running jobs (from `worker_running_set`) AND dispatched-but-not-started envelopes from `job_queue:<domain>:<worker_id>`, preventing silent job loss when a worker dies between dispatch and BLPOP.
 - Executors support Linux-only impersonation and Kerberos bootstrap: `executor.impersonate_user` and `executor.kerberos.{principal,keytab,ccache}`.
 - **Sensor executor** (`executor.type == "sensor"`): dispatched and executed entirely on workers. The worker polls an HTTP endpoint or SQL query at `poll_interval_seconds` intervals. Scheduler resolves `credential_ref` at dispatch time so the worker needs no MongoDB access. No scheduler-side sensor evaluation loop exists.
 - **Worker capabilities are fail-closed**: `_detect_capabilities()` in `worker/executor.py` only advertises an executor type after a concrete preflight check (e.g., `shell` requires a shell binary to execute successfully; `sql` requires Python AND a DB driver; `sensor` is always present since HTTP sensor uses stdlib). `startup_duration_ms` is recorded in worker registration metadata and the start/restart operation event.
@@ -200,6 +203,8 @@ Located in `scripts/`:
 - `MONGO_DB` — MongoDB database name
 - `SCHEDULER_HEARTBEAT_TTL` — Heartbeat TTL for workers
 - `SCHEDULER_WORKER_OFFLINE_PRUNE_SECONDS` — Age threshold to prune stale offline worker registry records (default `1800`; minimum effectively `3 * SCHEDULER_HEARTBEAT_TTL`)
+- `SCHEDULER_STARVATION_WARN_THRESHOLD` — Number of no-worker misses before logging a starvation warning for a pending job (default `5`)
+- `SCHEDULER_BYPASS_MAX_EXTRA` — Maximum bypass_concurrency jobs per worker above its `max_concurrency` limit; `0` = unlimited (default `0`)
 - `CORS_ALLOW_ORIGINS` — CORS allowed origins
 - `ADMIN_TOKEN` — Admin authentication token
 - `ADMIN_DOMAIN` — Admin domain name
