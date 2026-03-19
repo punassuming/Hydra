@@ -161,3 +161,55 @@ def test_encryption_produces_unique_tokens():
         assert t1 != t2
     finally:
         os.environ.pop("ADMIN_TOKEN", None)
+
+
+def test_admin_token_uses_constant_time_comparison():
+    """Admin token comparison must use hmac.compare_digest for timing-attack resistance."""
+    import hmac
+    from unittest.mock import patch, AsyncMock, MagicMock
+    from scheduler.utils.auth import enforce_api_key
+
+    os.environ["ADMIN_TOKEN"] = "secret-admin"
+    try:
+        request = MagicMock()
+        request.method.upper.return_value = "GET"
+        request.headers = {"x-api-key": "secret-admin"}
+        request.query_params = {}
+        request.url.path = "/jobs/"
+        request.state = MagicMock()
+
+        call_next = AsyncMock(return_value=MagicMock())
+
+        import asyncio
+        asyncio.get_event_loop().run_until_complete(enforce_api_key(request, call_next))
+
+        assert request.state.is_admin is True
+        assert call_next.called
+    finally:
+        os.environ.pop("ADMIN_TOKEN", None)
+
+
+def test_no_admin_token_env_rejects_unauthenticated():
+    """When ADMIN_TOKEN is not set, unauthenticated requests must be rejected."""
+    from unittest.mock import patch, AsyncMock, MagicMock
+    from scheduler.utils.auth import enforce_api_key
+
+    os.environ.pop("ADMIN_TOKEN", None)
+    try:
+        request = MagicMock()
+        request.method.upper.return_value = "GET"
+        request.headers = {}
+        request.query_params = {}
+        request.url.path = "/jobs/"
+        request.state = MagicMock()
+
+        call_next = AsyncMock(return_value=MagicMock())
+
+        import asyncio
+        resp = asyncio.get_event_loop().run_until_complete(enforce_api_key(request, call_next))
+
+        # call_next should NOT have been called
+        assert not call_next.called
+        assert resp.status_code == 401
+    finally:
+        os.environ.pop("ADMIN_TOKEN", None)

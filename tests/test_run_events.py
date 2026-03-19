@@ -368,3 +368,13 @@ class TestRunEventLoop:
 
         # Staging must be cleared even after an exception
         r.lrem.assert_called_with("run_events:prod:processing", 1, raw)
+
+
+def test_handle_event_logs_unknown_type():
+    """Unknown event types should log a warning rather than being silently dropped."""
+    import logging
+
+    with patch("scheduler.run_events.log") as mock_log:
+        _handle_event({"type": "totally_unknown"})
+        mock_log.warning.assert_called_once()
+        assert "Unknown run event type" in mock_log.warning.call_args[0][0]

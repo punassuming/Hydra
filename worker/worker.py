@@ -158,12 +158,19 @@ def worker_main():
         job_id = envelope.get("job_id") or job.get("_id") or job.get("id")
         if not job_id:
             return
+        run_id = None
+        _incremented = False
+        _active_job_added = False
+        _active_jobs_added = False
         try:
             bypass_concurrency = bool(job.get("bypass_concurrency", False) or bypass_override)
             with active_jobs_lock:
                 active_jobs.add(job_id)
+            _active_jobs_added = True
             slot_position = incr_running(worker_id, +1) - 1
+            _incremented = True
             add_active_job(worker_id, job_id)
+            _active_job_added = True
             run_id = uuid.uuid4().hex
             retries_remaining = int(job.get("retries", 0))
             retry_attempt = int(envelope.get("retry_attempt", 0))
@@ -356,13 +363,17 @@ def worker_main():
                 },
             )
         finally:
-            with active_kill_lock:
-                active_kill_events.pop(run_id, None)
+            if run_id is not None:
+                with active_kill_lock:
+                    active_kill_events.pop(run_id, None)
             r.delete(f"job_running:{domain}:{job_id}")
-            remove_active_job(worker_id, job_id)
-            incr_running(worker_id, -1)
-            with active_jobs_lock:
-                active_jobs.discard(job_id)
+            if _active_job_added:
+                remove_active_job(worker_id, job_id)
+            if _incremented:
+                incr_running(worker_id, -1)
+            if _active_jobs_added:
+                with active_jobs_lock:
+                    active_jobs.discard(job_id)
 
     print(f"Worker {worker_id} starting with max_concurrency={max_concurrency}")
     while True:
