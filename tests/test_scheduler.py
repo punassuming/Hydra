@@ -1027,3 +1027,24 @@ def test_bypass_concurrency_guardrail_filters_overloaded_worker():
     # With cap=1 extra, the overloaded worker (already has 1 extra) should be filtered out.
     # No dispatch should happen.
     mock_r.rpush.assert_not_called()
+
+
+def test_select_best_worker_handles_non_integer_values():
+    """Worker selection must be resilient to non-integer values for capacity fields."""
+    ws = [
+        {"worker_id": "w1", "max_concurrency": "invalid", "current_running": 0},
+        {"worker_id": "w2", "max_concurrency": 4, "current_running": "bad"},
+        {"worker_id": "w3", "max_concurrency": 4, "current_running": 1},
+    ]
+    best = select_best_worker(ws)
+    # Should not crash and should return a valid worker
+    assert best is not None
+    assert best["worker_id"] in ["w1", "w2", "w3"]
+
+
+def test_job_definition_default_affinity():
+    """JobDefinition should not require affinity to be passed explicitly."""
+    job = JobDefinition(name="test-job")
+    assert job.affinity is not None
+    assert job.affinity.os == []
+    assert job.affinity.tags == []

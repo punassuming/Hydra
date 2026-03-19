@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import List, Optional, Literal
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 import uuid
 from croniter import croniter
 
@@ -70,7 +70,7 @@ class JobDefinition(BaseModel):
     bypass_concurrency: bool = False
     global_locks: List[str] = Field(default_factory=list)
     source: Optional[SourceConfig] = None
-    affinity: Affinity
+    affinity: Affinity = Field(default_factory=Affinity)
     executor: ExecutorConfig = Field(default_factory=lambda: ShellExecutor(script=""))
     retries: int = 0
     timeout: int = 0
@@ -89,8 +89,7 @@ class JobDefinition(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
     def to_mongo(self) -> dict:
         d = self.model_dump(by_alias=True)

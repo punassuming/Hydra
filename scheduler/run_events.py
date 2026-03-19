@@ -502,6 +502,8 @@ def _handle_event(payload: Dict[str, Any]):
         _handle_run_end(payload)
     elif etype == "artifact_emitted":
         _handle_artifact_emitted(payload)
+    else:
+        log.warning("Unknown run event type: %s", etype)
 
 
 def _recover_staging_events(r) -> int:

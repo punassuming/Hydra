@@ -79,7 +79,7 @@ async def enforce_api_key(request: Request, call_next):
     admin_token = ADMIN_TOKEN or os.getenv("ADMIN_TOKEN")
 
     # Admin token short-circuit (respect ?domain override for observation)
-    if token == admin_token:
+    if admin_token and hmac.compare_digest(token or "", admin_token):
         request.state.domain = req_domain or ADMIN_DOMAIN
         request.state.is_admin = True
         return await call_next(request)

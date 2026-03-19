@@ -318,7 +318,11 @@ def scheduling_loop(stop_event: threading.Event):
                 continue
             wid = worker["worker_id"]
             dispatched_job = _resolve_credential_refs(job, db)
-            params = json.loads(params_raw) if params_raw else {}
+            try:
+                params = json.loads(params_raw) if params_raw else {}
+            except (json.JSONDecodeError, TypeError):
+                log.warning("Invalid params JSON for job %s; using empty params", job_id)
+                params = {}
 
             # Warn when dispatching a bypass_concurrency job to a worker that is
             # already at or above its normal concurrency limit.
