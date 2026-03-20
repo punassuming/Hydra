@@ -279,8 +279,10 @@ class TestBootstrapConfig:
         env = {
             "API_TOKEN": "test-token",
             "REDIS_URL": "redis://localhost:6379/0",
+            "HYDRA_BOOTSTRAP_WATCHDOG_INTERVAL": "30",
+            "HYDRA_BOOTSTRAP_INTERVAL_MINUTES": "5",
         }
-        with mock.patch.dict(os.environ, env, clear=False):
+        with mock.patch.dict(os.environ, env, clear=True):
             cfg = BootstrapConfig.from_env()
         assert cfg.api_token == "test-token"
         assert cfg.redis_url == "redis://localhost:6379/0"
@@ -293,7 +295,7 @@ class TestBootstrapConfig:
             "REDIS_URL": "redis://localhost:6379",
             "HYDRA_BOOTSTRAP_TASK_NAME": "\\Custom\\Task",
         }
-        with mock.patch.dict(os.environ, env, clear=False):
+        with mock.patch.dict(os.environ, env, clear=True):
             cfg = BootstrapConfig.from_env()
         assert cfg.task_name == "\\Custom\\Task"
 
@@ -302,7 +304,7 @@ class TestBootstrapConfig:
             "API_TOKEN": "tok",
             "REDIS_URL": "redis://localhost:6379",
         }
-        with mock.patch.dict(os.environ, env, clear=False):
+        with mock.patch.dict(os.environ, env, clear=True):
             cfg = BootstrapConfig.from_env()
         errors = cfg.validate()
         assert errors == []
@@ -311,32 +313,27 @@ class TestBootstrapConfig:
         env = {
             "REDIS_URL": "redis://localhost:6379",
         }
-        with mock.patch.dict(os.environ, {k: v for k, v in env.items()}, clear=False):
-            # Remove API_TOKEN if present
-            env_copy = os.environ.copy()
-            env_copy.pop("API_TOKEN", None)
-            env_copy["REDIS_URL"] = "redis://localhost:6379"
-            env_copy.pop("HYDRA_BOOTSTRAP_WORKER_COMMAND", None)
-            with mock.patch.dict(os.environ, env_copy, clear=True):
-                cfg = BootstrapConfig.from_env()
-            errors = cfg.validate()
+        with mock.patch.dict(os.environ, env, clear=True):
+            cfg = BootstrapConfig.from_env()
+        errors = cfg.validate()
         assert any("API_TOKEN" in e for e in errors)
 
     def test_validate_fails_without_redis_url(self):
-        env_copy = {k: v for k, v in os.environ.items()}
-        env_copy["API_TOKEN"] = "token"
-        env_copy.pop("REDIS_URL", None)
-        with mock.patch.dict(os.environ, env_copy, clear=True):
+        env = {
+            "API_TOKEN": "token",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
             cfg = BootstrapConfig.from_env()
         errors = cfg.validate()
         assert any("REDIS_URL" in e for e in errors)
 
     def test_validate_fails_with_tiny_watchdog_interval(self):
-        env_copy = {k: v for k, v in os.environ.items()}
-        env_copy["API_TOKEN"] = "token"
-        env_copy["REDIS_URL"] = "redis://localhost:6379"
-        env_copy["HYDRA_BOOTSTRAP_WATCHDOG_INTERVAL"] = "2"
-        with mock.patch.dict(os.environ, env_copy, clear=True):
+        env = {
+            "API_TOKEN": "token",
+            "REDIS_URL": "redis://localhost:6379",
+            "HYDRA_BOOTSTRAP_WATCHDOG_INTERVAL": "2",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
             cfg = BootstrapConfig.from_env()
         errors = cfg.validate()
         assert any("WATCHDOG_INTERVAL" in e for e in errors)

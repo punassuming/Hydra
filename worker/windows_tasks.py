@@ -99,12 +99,9 @@ def build_schtasks_create_command(
     if run_as_system:
         args += ["/RU", "SYSTEM"]
 
-    if working_dir:
-        args += ["/SD", working_dir]  # Note: /SD is start-date; /ST is start-time.
-        # Working directory is not directly configurable via schtasks CLI —
-        # it must be set via the task XML or the Task Scheduler COM API.
-        # We embed a `cd /d <dir> &&` prefix in the command instead (handled
-        # by the caller's command construction logic).
+    # Note: schtasks /Create does not support a working-directory flag.
+    # The caller embeds a `cd /d <dir> &&` prefix in the command instead so
+    # that the working directory is honoured at execution time.
 
     # schtasks /Create does not support a /Description flag from the command
     # line; descriptions can only be set via XML import.  We log it for

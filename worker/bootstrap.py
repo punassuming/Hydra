@@ -286,6 +286,7 @@ def _start_worker(config: BootstrapConfig) -> Optional[subprocess.Popen]:
             log_fh = open(config.log_file, "a", encoding="utf-8")  # noqa: WPS515
         except OSError as exc:
             logger.warning("Cannot open log file %r: %s — falling back to inherited stdio.", config.log_file, exc)
+            log_fh = None
 
     stdout = log_fh if log_fh else None
     stderr = log_fh if log_fh else None
@@ -302,7 +303,7 @@ def _start_worker(config: BootstrapConfig) -> Optional[subprocess.Popen]:
         return proc
     except Exception as exc:
         logger.error("Failed to start worker process: %s", exc)
-        if log_fh:
+        if log_fh is not None:
             log_fh.close()
         return None
 
@@ -337,6 +338,10 @@ def run_watchdog(config: BootstrapConfig) -> int:
     4. Checks whether the worker is still alive; restarts if not.
     5. Exits cleanly on SIGTERM / SIGINT (and removes the lock file).
 
+    If the worker fails to start repeatedly, an exponential backoff (up to
+    5 minutes) is applied between restart attempts to prevent tight restart
+    loops from consuming resources.
+
     Returns
     -------
     int
@@ -349,6 +354,8 @@ def run_watchdog(config: BootstrapConfig) -> int:
         return 1
 
     worker_proc: Optional[subprocess.Popen] = None
+    consecutive_failures = 0
+    _MAX_BACKOFF_SECONDS = 300  # 5 minutes
 
     try:
         while not _shutdown_requested:
@@ -357,6 +364,18 @@ def run_watchdog(config: BootstrapConfig) -> int:
                     rc = worker_proc.returncode
                     logger.warning("Worker process PID=%d exited with code %s; restarting.", worker_proc.pid, rc)
                 worker_proc = _start_worker(config)
+                if worker_proc is None:
+                    consecutive_failures += 1
+                    backoff = min(config.watchdog_interval_seconds * (2 ** (consecutive_failures - 1)), _MAX_BACKOFF_SECONDS)
+                    logger.warning(
+                        "Worker failed to start (attempt %d); backing off %.0f s.",
+                        consecutive_failures,
+                        backoff,
+                    )
+                    time.sleep(backoff)
+                    continue
+                else:
+                    consecutive_failures = 0
 
             # Refresh lock file with current PID (guards against stale-lock detection
             # by a concurrently starting instance of this bootstrap).
