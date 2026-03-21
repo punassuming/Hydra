@@ -90,6 +90,9 @@ Hydra Jobs is a distributed job runner designed for flexibility and scalability.
 - `worker/utils/git.py` — Git clone/checkout logic.
 - `worker/executor.py` — Job execution engine (shell/python/batch/external) with git source support.
 - `worker/executor.py` — also handles Linux impersonation + Kerberos pre-auth when configured.
+- `worker/__main__.py` — CLI entry point; dispatches to `worker_main()` (default) or `bootstrap.main()` when the first argument is `bootstrap`.
+- `worker/bootstrap.py` — Windows worker bootstrap/watchdog: `BootstrapConfig` model, PID-lock helpers, watchdog loop, and `action_install`/`action_remove`/`action_run`/`action_validate` functions. CLI: `python -m worker bootstrap <install|remove|run|validate>`.
+- `worker/windows_tasks.py` — Thin wrapper around `schtasks` for Windows Task Scheduler management. All public functions raise `RuntimeError` on non-Windows platforms.
 - `ui/src/App.tsx` — Main React component.
 - `ui/src/api/` — API client with domain-scoped token management.
 - `ui/src/components/JobForm.tsx` — Job creation form with AI generation.

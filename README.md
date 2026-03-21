@@ -215,6 +215,28 @@ REDIS_PASSWORD=<worker_redis_acl_password> \
 docker compose -f docker-compose.worker.yml up --build --scale worker=2
 ```
 
+### Windows Workers — Task Scheduler Bootstrap
+
+On Windows hosts, use the built-in bootstrap module to register a single Task
+Scheduler task that keeps a Hydra worker alive:
+
+```powershell
+# Validate config first
+$env:DOMAIN="prod"; $env:API_TOKEN="<token>"; $env:REDIS_URL="redis://host:6379/0"
+python -m worker bootstrap validate
+
+# Install the scheduled task (requires admin)
+python -m worker bootstrap install
+
+# Start the watchdog immediately (without waiting for reboot)
+python -m worker bootstrap run
+
+# Remove the task
+python -m worker bootstrap remove
+```
+
+See [`docs/windows-worker-bootstrap.md`](docs/windows-worker-bootstrap.md) for a complete guide.
+
 ---
 
 ## Affinity & Routing
