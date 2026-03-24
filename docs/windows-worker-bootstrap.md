@@ -32,11 +32,48 @@ Windows Task Scheduler
 
 | Requirement | Notes |
 |---|---|
-| Python 3.11+ | Must be on `PATH` or set via `HYDRA_PYTHON_PATH` |
-| Hydra worker installed | `pip install -r worker/requirements.txt` from the repo root |
+| Python 3.11+ | Available via [uv](https://github.com/astral-sh/uv) or a standalone installer |
+| uv | Recommended for managing the Python virtual environment |
+| Hydra worker installed | See **Runtime directory setup** below |
 | Redis connection | `REDIS_URL` must be reachable from the Windows host |
 | Domain token | Obtain from a Hydra administrator (`API_TOKEN`) |
 | Administrator rights | Required only for the `install` step (to create the scheduled task) |
+
+---
+
+## Runtime directory setup
+
+The worker process should run from a **dedicated runtime directory** (e.g.
+`C:\hydra-worker\`) that is separate from the source tree.  This keeps
+credentials, logs, and the virtual environment isolated from the repository.
+
+```powershell
+# Create the runtime directory
+New-Item -ItemType Directory -Force C:\hydra-worker
+New-Item -ItemType Directory -Force C:\hydra-worker\logs
+
+# Create a virtual environment with uv
+cd C:\hydra-worker
+uv venv .venv
+
+# Install the Hydra worker package from the source tree
+uv pip install -e C:\path\to\hydra
+```
+
+Create a `.env` file in `C:\hydra-worker\` with the worker credentials:
+
+```ini
+DOMAIN=prod
+API_TOKEN=<your-domain-token>
+REDIS_URL=redis://<redis-host>:6379/0
+REDIS_PASSWORD=<your-redis-acl-password>
+HYDRA_BOOTSTRAP_WORKING_DIR=C:\hydra-worker
+HYDRA_BOOTSTRAP_LOG_FILE=C:\hydra-worker\logs\worker.log
+PYTHONUNBUFFERED=1
+```
+
+The bootstrap reads this file automatically on startup — no need to set
+environment variables in the shell before running `install` or `run`.
 
 ---
 
@@ -62,6 +99,7 @@ service account's user profile (or via a `.env` file loaded before running).
 | `WORKER_TAGS` | — | Comma-separated affinity tags |
 | `MAX_CONCURRENCY` | `2` | Maximum concurrent jobs |
 | `WORKER_STATE` | `online` | Initial worker state (`online`/`draining`) |
+| `DEPLOYMENT_TYPE` | `scheduler` | Deployment type shown in the UI. Set automatically to `scheduler` by the bootstrap watchdog. Override only if needed (e.g. `standalone` for a manually-launched worker). |
 
 ### Optional (bootstrap / watchdog)
 
@@ -81,19 +119,17 @@ service account's user profile (or via a `.env` file loaded before running).
 
 ## Commands
 
-All commands are run from the repository root (or any directory where `worker`
-is importable) in a Windows terminal or PowerShell session.
+All commands below assume the runtime directory is `C:\hydra-worker\` with a
+`uv`-managed virtual environment at `C:\hydra-worker\.venv\` and credentials
+in `C:\hydra-worker\.env`.
 
 ### Validate configuration
 
 Check that all required variables are set before installing:
 
 ```powershell
-$env:DOMAIN    = "prod"
-$env:API_TOKEN = "dt_yourtoken"
-$env:REDIS_URL = "redis://redis.internal:6379/0"
-
-python -m worker bootstrap validate
+cd C:\hydra-worker
+.\.venv\Scripts\python.exe -m worker bootstrap validate
 ```
 
 Expected output:
@@ -101,8 +137,8 @@ Expected output:
 Bootstrap configuration is valid.
   task_name             : \Hydra\WorkerBootstrap
   schedule_type         : ONSTART
-  worker_command        : C:\Python311\python.exe -m worker
-  working_dir           : 'C:\hydra' (effective)
+  worker_command        : C:\hydra-worker\.venv\Scripts\python.exe -m worker
+  working_dir           : 'C:\hydra-worker' (effective)
   lock_file             : C:\Users\svc_hydra\AppData\Local\Temp\hydra_bootstrap.lock
   watchdog_interval (s) : 30
   domain                : prod
@@ -110,21 +146,13 @@ Bootstrap configuration is valid.
 
 ### Install the scheduled task
 
-Run this **once** (or again to update an existing task) in an elevated
-(administrator) PowerShell session:
+Run this **once** (or again to update an existing task) in an **elevated
+(administrator) PowerShell session**.  The bootstrap reads credentials from
+`.env` automatically — no need to set environment variables in the shell.
 
 ```powershell
-$env:DOMAIN    = "prod"
-$env:API_TOKEN = "dt_yourtoken"
-$env:REDIS_URL = "redis://redis.internal:6379/0"
-
-# Optional: redirect worker output to a log file
-$env:HYDRA_BOOTSTRAP_LOG_FILE = "C:\hydra\logs\worker.log"
-
-# Optional: use a custom working directory
-$env:HYDRA_BOOTSTRAP_WORKING_DIR = "C:\hydra"
-
-python -m worker bootstrap install
+cd C:\hydra-worker
+.\.venv\Scripts\python.exe -m worker bootstrap install
 ```
 
 Expected output:
@@ -132,8 +160,12 @@ Expected output:
 Task '\Hydra\WorkerBootstrap' installed successfully.
 The task will launch the Hydra worker watchdog on the next trigger.
   Trigger        : ONSTART
-  Worker command : C:\Python311\python.exe -m worker
+  Worker command : C:\hydra-worker\.venv\Scripts\python.exe -m worker
 ```
+
+The task is created via `Register-ScheduledTask` (PowerShell), which stores the
+executable path, arguments, and working directory as separate fields — avoiding
+the quoting ambiguity of the legacy `schtasks /TR` parameter.
 
 > **Note:** The `install` command is idempotent — running it again is safe and
 > will update the task definition in place.
@@ -143,7 +175,8 @@ The task will launch the Hydra worker watchdog on the next trigger.
 After installing, you can start the watchdog manually:
 
 ```powershell
-python -m worker bootstrap run
+cd C:\hydra-worker
+.\.venv\Scripts\python.exe -m worker bootstrap run
 ```
 
 This blocks until interrupted (Ctrl+C or process termination).  The Task
@@ -152,7 +185,8 @@ Scheduler task will run this command automatically on the next system start-up.
 ### Remove the scheduled task
 
 ```powershell
-python -m worker bootstrap remove
+cd C:\hydra-worker
+.\.venv\Scripts\python.exe -m worker bootstrap remove
 ```
 
 Expected output:
@@ -173,36 +207,38 @@ provisioning script:
 ```powershell
 # ── Hydra Worker Bootstrap — production setup ──────────────────────────────
 
-# 1. Set required environment variables (replace with real values).
-$env:DOMAIN    = "prod"
-$env:API_TOKEN = "dt_REPLACE_WITH_REAL_TOKEN"
-$env:REDIS_URL = "redis://redis.internal:6379/0"
+# 1. Create the runtime directory and install the worker.
+New-Item -ItemType Directory -Force C:\hydra-worker
+New-Item -ItemType Directory -Force C:\hydra-worker\logs
+cd C:\hydra-worker
+uv venv .venv
+uv pip install -e C:\path\to\hydra
 
-# 2. Optional Redis ACL credentials (if ACL is enabled on your Redis instance).
-# $env:REDIS_PASSWORD = "REPLACE_WITH_REDIS_ACL_PASSWORD"
+# 2. Write credentials to .env (replace placeholder values).
+@"
+DOMAIN=prod
+API_TOKEN=dt_REPLACE_WITH_REAL_TOKEN
+REDIS_URL=redis://redis.internal:6379/0
+REDIS_PASSWORD=REPLACE_WITH_REDIS_ACL_PASSWORD
+HYDRA_BOOTSTRAP_WORKING_DIR=C:\hydra-worker
+HYDRA_BOOTSTRAP_LOG_FILE=C:\hydra-worker\logs\worker.log
+WORKER_TAGS=windows,prod,batch
+MAX_CONCURRENCY=4
+PYTHONUNBUFFERED=1
+"@ | Set-Content C:\hydra-worker\.env
 
-# 3. Bootstrap settings.
-$env:HYDRA_BOOTSTRAP_TASK_NAME        = "\Hydra\WorkerBootstrap"
-$env:HYDRA_BOOTSTRAP_SCHEDULE_TYPE   = "ONSTART"
-$env:HYDRA_BOOTSTRAP_WORKING_DIR     = "C:\hydra"
-$env:HYDRA_BOOTSTRAP_LOG_FILE        = "C:\hydra\logs\worker.log"
-$env:HYDRA_BOOTSTRAP_WATCHDOG_INTERVAL = "30"
-
-# 4. Worker settings.
-$env:WORKER_TAGS        = "windows,prod,batch"
-$env:MAX_CONCURRENCY    = "4"
-
-# 5. Validate before installing.
-python -m worker bootstrap validate
+# 3. Validate before installing.
+.\.venv\Scripts\python.exe -m worker bootstrap validate
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
-# 6. Install (or update) the Task Scheduler entry.
-python -m worker bootstrap install
+# 4. Install (or update) the Task Scheduler entry (requires elevated shell).
+.\.venv\Scripts\python.exe -m worker bootstrap install
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
-# 7. Start the watchdog immediately (optional — will also start on next reboot).
-Start-Process python -ArgumentList "-m worker bootstrap run" `
-    -WorkingDirectory "C:\hydra" -WindowStyle Hidden
+# 5. Start the watchdog immediately (optional — will also start on next reboot).
+Start-Process -FilePath ".\.venv\Scripts\python.exe" `
+    -ArgumentList "-m worker bootstrap run" `
+    -WorkingDirectory "C:\hydra-worker" -WindowStyle Hidden
 ```
 
 ---
@@ -279,8 +315,9 @@ on non-Windows hosts for testing.
 
 ### "Access is denied" when running install
 
-The `install` command calls `schtasks /Create` which requires administrator
-rights.  Open PowerShell as Administrator and re-run the command.
+The `install` command calls `Register-ScheduledTask` via PowerShell, which
+requires administrator rights to create tasks in the `\Hydra\` folder.  Open
+PowerShell as Administrator and re-run the command.
 
 ### Worker keeps restarting
 

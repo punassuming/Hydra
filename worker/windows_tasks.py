@@ -154,6 +154,12 @@ def run_schtasks(args: List[str], timeout: int = 30) -> subprocess.CompletedProc
     return result
 
 
+def _ps_escape(value: str) -> str:
+    """Escape a string for safe embedding inside a PowerShell single-quoted string."""
+    # In PowerShell single-quoted strings, a literal ' is written as ''.
+    return value.replace("'", "''")
+
+
 def install_task(
     task_name: str,
     command: str,
@@ -164,21 +170,30 @@ def install_task(
     run_as_system: bool = False,
     description: str = "Hydra worker watchdog/bootstrap",
 ) -> None:
-    """Create or update a Windows scheduled task.
+    """Create or update a Windows scheduled task via PowerShell Register-ScheduledTask.
 
-    Calling this function multiple times is safe — ``/F`` forces an overwrite,
-    making the operation idempotent.
+    Using Register-ScheduledTask (rather than schtasks /Create /TR) avoids the
+    double-quoting ambiguity in schtasks /TR, where cmd.exe is treated as the
+    program name instead of just an executable, and the working directory can be
+    set directly on the action without embedding a ``cd /d`` wrapper.
+
+    Calling this function multiple times is safe — ``-Force`` overwrites any
+    existing task of the same name.
 
     Parameters
     ----------
     task_name:
-        Name of the scheduled task.
+        Name of the scheduled task (may include a folder prefix like
+        ``\\Hydra\\worker-prod``).
     command:
-        Full command string for the task action.
+        Full command string for the task action (e.g.
+        ``C:\\Python311\\python.exe -m worker bootstrap run``).  The first
+        space-separated token is used as the executable; the remainder as
+        arguments.
     working_dir:
-        Optional working directory.  When provided, a ``cd /d "<dir>" && ``
-        prefix is prepended to *command* so that the working directory is
-        honoured at execution time.
+        Working directory for the task action.  Passed directly to the
+        ``New-ScheduledTaskAction -WorkingDirectory`` parameter; no shell
+        wrapping required.
     schedule_type:
         ``"ONSTART"`` (run at system start-up) or ``"MINUTE"`` (periodic).
     interval_minutes:
@@ -187,37 +202,79 @@ def install_task(
         Run as SYSTEM account.  Requires the installing user to have admin
         privileges.
     description:
-        Human-readable description (logged; not persisted via CLI).
+        Human-readable description (stored in the task definition).
 
     Raises
     ------
     RuntimeError
         On non-Windows platforms.
     subprocess.CalledProcessError
-        When schtasks exits with a non-zero return code.
+        When PowerShell exits with a non-zero return code.
     """
     _require_windows()
 
-    effective_command = command
-    if working_dir:
-        # Embed working-directory change into the command so it takes effect
-        # regardless of schtasks not having a /WORKDIR flag.
-        wd_quoted = working_dir.replace('"', '""')
-        effective_command = f'cmd /c "cd /d "{wd_quoted}" && {command}"'
+    # Split command into executable + arguments (first token vs the rest).
+    parts = command.split(None, 1)
+    executable = parts[0]
+    arguments = parts[1] if len(parts) > 1 else ""
 
-    cmd_args = build_schtasks_create_command(
-        task_name=task_name,
-        command=effective_command,
-        working_dir=None,  # absorbed into command above
-        schedule_type=schedule_type,
-        interval_minutes=interval_minutes,
-        run_as_system=run_as_system,
-        description=description,
+    # Build the PowerShell trigger expression.
+    if schedule_type == "ONSTART":
+        trigger_expr = "New-ScheduledTaskTrigger -AtStartup"
+    elif schedule_type == "MINUTE":
+        trigger_expr = f"New-ScheduledTaskTrigger -RepetitionInterval (New-TimeSpan -Minutes {interval_minutes}) -Once -At '00:00'"
+    else:
+        raise ValueError(f"Unsupported schedule_type {schedule_type!r}; expected 'ONSTART' or 'MINUTE'.")
+
+    wd_line = (
+        f"-WorkingDirectory '{_ps_escape(working_dir)}' "
+        if working_dir
+        else ""
     )
-    result = run_schtasks(cmd_args)
+    run_level = "Highest"
+    user_id = "SYSTEM" if run_as_system else "$env:USERNAME"
+    user_line = (
+        f"New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel {run_level} -LogonType ServiceAccount"
+        if run_as_system
+        else f"New-ScheduledTaskPrincipal -UserId {user_id} -RunLevel {run_level} -LogonType Interactive"
+    )
+
+    ps_script = f"""
+$action  = New-ScheduledTaskAction `
+    -Execute '{_ps_escape(executable)}' `
+    -Argument '{_ps_escape(arguments)}' `
+    {wd_line}
+$trigger   = {trigger_expr}
+$principal = {user_line}
+$settings  = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0 -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+Register-ScheduledTask `
+    -TaskName '{_ps_escape(task_name)}' `
+    -Action $action `
+    -Trigger $trigger `
+    -Principal $principal `
+    -Settings $settings `
+    -Description '{_ps_escape(description)}' `
+    -Force | Out-Null
+Write-Host "Task '{_ps_escape(task_name)}' registered successfully."
+"""
+
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            ["powershell", "..."],
+            output=result.stdout,
+            stderr=result.stderr,
+        )
     logger.info("Task %r installed/updated successfully.", task_name)
     if result.stdout:
-        logger.debug("schtasks stdout: %s", result.stdout.strip())
+        logger.debug("Register-ScheduledTask output: %s", result.stdout.strip())
 
 
 def remove_task(task_name: str) -> None:

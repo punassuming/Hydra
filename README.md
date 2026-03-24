@@ -250,7 +250,7 @@ Target specific workers using the `affinity` block:
     "tags": ["gpu", "high-mem"],
     "hostnames": ["worker-01"],
     "executor_types": ["python"],
-    "deployment_types": ["docker"]
+    "deployment_types": ["docker", "scheduler"]
   }
 }
 ```

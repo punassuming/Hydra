@@ -44,6 +44,42 @@ logger = logging.getLogger(__name__)
 
 _IS_WINDOWS = platform.system().lower().startswith("win")
 
+
+# ---------------------------------------------------------------------------
+# .env file loader (no external dependencies)
+# ---------------------------------------------------------------------------
+
+def _load_env_file(path: Optional[str] = None) -> None:
+    """Load key=value pairs from a .env file into os.environ.
+
+    Variables already present in the environment are not overwritten, so
+    explicit env vars always take precedence over the file.
+
+    The file path is resolved in order:
+    1. The *path* argument (if given).
+    2. The ``HYDRA_ENV_FILE`` environment variable.
+    3. ``.env`` in the current working directory.
+    """
+    candidate = path or os.environ.get("HYDRA_ENV_FILE") or ".env"
+    try:
+        env_path = Path(candidate)
+        if not env_path.exists():
+            return
+        for raw in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            # Strip optional surrounding quotes from the value.
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+                value = value[1:-1]
+            if key and key not in os.environ:
+                os.environ[key] = value
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Could not load env file %r: %s", candidate, exc)
+
 # ---------------------------------------------------------------------------
 # Configuration model
 # ---------------------------------------------------------------------------
@@ -265,8 +301,13 @@ def _build_worker_env() -> dict:
     Starts from the current process environment and passes through all
     HYDRA_* / DOMAIN / API_TOKEN / REDIS_* variables so the worker inherits
     them correctly.
+
+    Sets ``DEPLOYMENT_TYPE=scheduler`` if not already present so that workers
+    launched by the bootstrap are identified correctly in the Hydra UI.
     """
-    return os.environ.copy()
+    env = os.environ.copy()
+    env.setdefault("DEPLOYMENT_TYPE", "scheduler")
+    return env
 
 
 def _start_worker(config: BootstrapConfig) -> Optional[subprocess.Popen]:
@@ -542,6 +583,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("validate", help="Validate configuration and print a summary.")
 
     args = parser.parse_args(argv)
+    _load_env_file()
     config = BootstrapConfig.from_env()
 
     actions = {

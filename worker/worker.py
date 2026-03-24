@@ -52,7 +52,10 @@ def register_worker(worker_id: str, max_concurrency: int):
     except Exception:
         ip_addr = ""
     subnet = ".".join(ip_addr.split(".")[:3]) if ip_addr else ""
-    deployment_type = os.getenv("DEPLOYMENT_TYPE", "docker")
+    import pathlib
+    _in_docker = pathlib.Path("/.dockerenv").exists()
+    _default_deployment_type = "docker" if _in_docker else "standalone"
+    deployment_type = os.getenv("DEPLOYMENT_TYPE", _default_deployment_type)
     domain_token = get_domain_token()
     domain = get_domain()
     worker_key = f"workers:{domain}:{worker_id}"

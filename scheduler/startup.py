@@ -15,16 +15,18 @@ from .mongo_client import get_db
 
 log = setup_logging("scheduler.startup")
 
-DEFAULT_ADMIN_TOKEN = "admin_secret"
-
 
 def ensure_admin_token() -> None:
-    """Ensure ADMIN_TOKEN is set, falling back to a default with a warning."""
+    """Ensure ADMIN_TOKEN is set, generating a random one with a warning if not."""
     admin_token = os.getenv("ADMIN_TOKEN")
     if not admin_token:
-        admin_token = DEFAULT_ADMIN_TOKEN
+        admin_token = secrets.token_hex(24)
         os.environ["ADMIN_TOKEN"] = admin_token
-        log.warning("ADMIN_TOKEN not set; using default ADMIN_TOKEN. Set ADMIN_TOKEN in production.")
+        log.warning(
+            "ADMIN_TOKEN not set; generated ephemeral token: %s  "
+            "Set ADMIN_TOKEN in production to avoid losing access on restart.",
+            admin_token,
+        )
     try:
         from .utils import auth
         auth.ADMIN_TOKEN = admin_token
@@ -33,7 +35,17 @@ def ensure_admin_token() -> None:
 
 
 def ensure_domains_seeded() -> None:
-    """Cache existing domain token hashes into Redis; seed a default 'prod' domain if none exist."""
+    """Cache existing domain token hashes into Redis; seed a default domain if none exist.
+
+    On first startup (empty MongoDB), seeds a domain using optional env vars:
+      SEED_DOMAIN              — domain name to seed (default: "prod")
+      SEED_DOMAIN_TOKEN        — API token to use; random if omitted
+      SEED_DOMAIN_REDIS_PASSWORD — Redis ACL password to use; random if omitted
+
+    Pre-configuring SEED_DOMAIN_TOKEN and SEED_DOMAIN_REDIS_PASSWORD lets dev
+    environments (e.g. docker-compose.dev.yml) wire up workers on first boot
+    without any manual provisioning steps.
+    """
     r = get_redis()
     db = get_db()
     for doc in db.domains.find({}):
@@ -56,12 +68,33 @@ def ensure_domains_seeded() -> None:
                 domain,
             )
     if db.domains.count_documents({}) == 0:
-        token = secrets.token_hex(24)
-        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        seed_domain = os.getenv("SEED_DOMAIN", "prod").strip() or "prod"
+        seed_token = os.getenv("SEED_DOMAIN_TOKEN", "").strip() or secrets.token_hex(24)
+        seed_redis_password = os.getenv("SEED_DOMAIN_REDIS_PASSWORD", "").strip() or None
+        token_hash = hashlib.sha256(seed_token.encode()).hexdigest()
+
+        acl_password = seed_redis_password
+        acl_user = None
+        try:
+            redis_acl = ensure_worker_acl_user(seed_domain, password=seed_redis_password)
+            acl_password = redis_acl.get("password")
+            acl_user = redis_acl.get("username")
+        except Exception as exc:
+            log.warning("Failed to provision Redis ACL for domain %s: %s", seed_domain, exc)
+
         db.domains.insert_one(
-            {"domain": "prod", "display_name": "Production", "description": "Production", "token_hash": token_hash}
+            {
+                "domain": seed_domain,
+                "display_name": seed_domain.capitalize(),
+                "description": "Default domain",
+                "token_hash": token_hash,
+                "worker_redis_acl_user": acl_user,
+                "worker_redis_acl_password": acl_password,
+            }
         )
-        r.sadd("hydra:domains", "prod")
-        r.set("token_hash:prod", token_hash)
-        r.set(f"token_hash:{token_hash}:domain", "prod")
-        log.warning("Seeded default prod domain with token: %s", token)
+        r.sadd("hydra:domains", seed_domain)
+        r.set(f"token_hash:{seed_domain}", token_hash)
+        r.set(f"token_hash:{token_hash}:domain", seed_domain)
+        log.warning("Seeded default '%s' domain with token: %s", seed_domain, seed_token)
+        if acl_password:
+            log.info("Redis ACL user '%s' provisioned for domain '%s'.", acl_user or seed_domain, seed_domain)

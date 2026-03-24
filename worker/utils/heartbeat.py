@@ -1,3 +1,5 @@
+import platform
+import subprocess
 import threading
 import time
 import json
@@ -8,8 +10,10 @@ from redis.exceptions import RedisError
 from ..redis_client import get_redis
 from ..config import get_domain
 
+_IS_WINDOWS = platform.system().lower().startswith("win")
 
-def _collect_process_metrics() -> dict:
+
+def _collect_process_metrics_linux() -> dict:
     """
     Collect process/memory metrics from the worker container namespace.
     We sum VmRSS across visible /proc entries so child execution processes are included.
@@ -56,6 +60,72 @@ def _collect_process_metrics() -> dict:
         "load_1m": load_1m,
         "load_5m": load_5m,
     }
+
+
+def _collect_process_metrics_windows() -> dict:
+    """
+    Collect process/memory metrics on Windows.
+
+    Memory is read via the Win32 GetProcessMemoryInfo API (no subprocess
+    overhead).  Process count includes the current process plus any direct
+    child processes (job executors), obtained via a lightweight wmic query.
+    Load average is not available on Windows and is reported as None.
+    """
+    import ctypes
+    import ctypes.wintypes
+
+    # --- RSS memory via GetProcessMemoryInfo ---
+    memory_rss_mb = 0.0
+    try:
+        class _PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+            _fields_ = [
+                ("cb",                          ctypes.wintypes.DWORD),
+                ("PageFaultCount",              ctypes.wintypes.DWORD),
+                ("PeakWorkingSetSize",          ctypes.c_size_t),
+                ("WorkingSetSize",              ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage",     ctypes.c_size_t),
+                ("QuotaPagedPoolUsage",         ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage",  ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage",      ctypes.c_size_t),
+                ("PagefileUsage",               ctypes.c_size_t),
+                ("PeakPagefileUsage",           ctypes.c_size_t),
+            ]
+
+        pmc = _PROCESS_MEMORY_COUNTERS()
+        pmc.cb = ctypes.sizeof(pmc)
+        h_proc = ctypes.windll.kernel32.GetCurrentProcess()
+        if ctypes.windll.psapi.GetProcessMemoryInfo(h_proc, ctypes.byref(pmc), pmc.cb):
+            memory_rss_mb = round(pmc.WorkingSetSize / (1024 * 1024), 2)
+    except Exception:
+        pass
+
+    # --- Child process count via wmic ---
+    process_count = 1  # at minimum, ourselves
+    try:
+        pid = os.getpid()
+        result = subprocess.run(
+            ["wmic", "process", "where", f"ParentProcessId={pid}", "get", "ProcessId"],
+            capture_output=True, text=True, timeout=5,
+        )
+        # Output: header "ProcessId\n" + one line per child PID + trailing blank line
+        child_pids = [l.strip() for l in result.stdout.splitlines() if l.strip().isdigit()]
+        process_count = 1 + len(child_pids)
+    except Exception:
+        pass
+
+    return {
+        "process_count": process_count,
+        "memory_rss_mb": memory_rss_mb,
+        "load_1m": None,
+        "load_5m": None,
+    }
+
+
+def _collect_process_metrics() -> dict:
+    """Collect process/memory metrics, dispatching to the platform implementation."""
+    if _IS_WINDOWS:
+        return _collect_process_metrics_windows()
+    return _collect_process_metrics_linux()
 
 
 def _ensure_worker_registration(r, domain: str, worker_id: str, refresh_registration: Callable[[], None] | None = None) -> bool:

@@ -1,22 +1,35 @@
 services:
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   mongo:
     # mongo:6 requires AVX; use 5.x for broader CPU support
     image: mongo:6.0
+    restart: unless-stopped
     command: ["mongod", "--bind_ip_all", "--setParameter", "diagnosticDataCollectionEnabled=false"]
     ports:
       - "27017:27017"
     volumes:
       - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   scheduler:
     build:
       context: ./scheduler
       dockerfile: Dockerfile
+    restart: unless-stopped
     env_file:
       - .env
     environment:
@@ -26,8 +39,10 @@ services:
       - MONGO_DB=hydra_jobs
       - SCHEDULER_HEARTBEAT_TTL=10
     depends_on:
-      - redis
-      - mongo
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
     ports:
       - "8000:8000"
 
@@ -37,8 +52,10 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+    restart: unless-stopped
     depends_on:
-      - scheduler
+      scheduler:
+        condition: service_started
     ports:
       - "5173:80"
 

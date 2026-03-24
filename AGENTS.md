@@ -225,7 +225,7 @@ Located in `scripts/`:
 - `ALLOWED_USERS` — Users allowed to submit jobs to this worker
 - `MAX_CONCURRENCY` — Maximum concurrent jobs
 - `WORKER_STATE` — Initial worker state
-- `DEPLOYMENT_TYPE` — Type of deployment
+- `DEPLOYMENT_TYPE` — Type of deployment. Auto-detected if not set: `docker` (Linux inside a Docker container), `scheduler` (set automatically by the Windows bootstrap watchdog), `standalone` (bare-OS process, not containerised and not managed by Task Scheduler). Override to `kubernetes` or other values as needed.
 - `WORKER_METRICS_SAMPLE_SECONDS` — sampling interval for worker metrics history (default `15`)
 - `WORKER_METRICS_WINDOW_SECONDS` — rolling metrics retention window in seconds (default `1800`)
 
