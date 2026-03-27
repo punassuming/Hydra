@@ -168,10 +168,10 @@ class TestRunSchtasksOsGuard:
 # ---------------------------------------------------------------------------
 
 class TestInstallTask:
-    def test_install_calls_run_schtasks_with_create(self):
+    def test_install_calls_powershell_with_register_scheduled_task(self):
         with mock.patch("worker.windows_tasks._IS_WINDOWS", True), \
-             mock.patch("worker.windows_tasks.run_schtasks") as mock_run:
-            mock_run.return_value = mock.MagicMock(stdout="SUCCESS: The scheduled task was created.")
+             mock.patch("worker.windows_tasks.subprocess.run") as mock_run:
+            mock_run.return_value = mock.MagicMock(returncode=0, stdout="Task registered successfully.", stderr="")
             from worker.windows_tasks import install_task
             install_task(
                 task_name="\\Hydra\\Worker",
@@ -181,13 +181,15 @@ class TestInstallTask:
             )
             mock_run.assert_called_once()
             call_args = mock_run.call_args[0][0]
-            assert "schtasks" in call_args
-            assert "/Create" in call_args
+            assert call_args[0] == "powershell"
+            # The PowerShell script should register the task
+            ps_script = call_args[-1]
+            assert "Register-ScheduledTask" in ps_script
 
-    def test_install_embeds_working_dir_in_command(self):
+    def test_install_embeds_working_dir_in_ps_script(self):
         with mock.patch("worker.windows_tasks._IS_WINDOWS", True), \
-             mock.patch("worker.windows_tasks.run_schtasks") as mock_run:
-            mock_run.return_value = mock.MagicMock(stdout="")
+             mock.patch("worker.windows_tasks.subprocess.run") as mock_run:
+            mock_run.return_value = mock.MagicMock(returncode=0, stdout="", stderr="")
             from worker.windows_tasks import install_task
             install_task(
                 task_name="\\Hydra\\Worker",
@@ -197,16 +199,16 @@ class TestInstallTask:
                 interval_minutes=5,
             )
             call_args = mock_run.call_args[0][0]
-            tr_idx = call_args.index("/TR")
-            tr_value = call_args[tr_idx + 1]
-            # The working dir should be embedded as a cd /d prefix
-            assert "cd /d" in tr_value
+            ps_script = call_args[-1]
+            # The working dir should be passed via -WorkingDirectory in the PS script
+            assert "WorkingDirectory" in ps_script
+            assert "C:\\hydra" in ps_script
 
     def test_install_is_idempotent_with_force_flag(self):
-        """Calling install twice should pass /F each time — no error."""
+        """Calling install twice should pass -Force each time — no error."""
         with mock.patch("worker.windows_tasks._IS_WINDOWS", True), \
-             mock.patch("worker.windows_tasks.run_schtasks") as mock_run:
-            mock_run.return_value = mock.MagicMock(stdout="")
+             mock.patch("worker.windows_tasks.subprocess.run") as mock_run:
+            mock_run.return_value = mock.MagicMock(returncode=0, stdout="", stderr="")
             from worker.windows_tasks import install_task
             for _ in range(2):
                 install_task(
@@ -217,7 +219,8 @@ class TestInstallTask:
                 )
             assert mock_run.call_count == 2
             for call in mock_run.call_args_list:
-                assert "/F" in call[0][0]
+                ps_script = call[0][0][-1]
+                assert "-Force" in ps_script
 
 
 class TestRemoveTask:
@@ -465,8 +468,8 @@ class TestActionInstall:
     def test_calls_install_task_on_windows(self, capsys):
         with mock.patch("worker.bootstrap._IS_WINDOWS", True), \
              mock.patch("worker.windows_tasks._IS_WINDOWS", True), \
-             mock.patch("worker.windows_tasks.run_schtasks") as mock_run:
-            mock_run.return_value = mock.MagicMock(stdout="")
+             mock.patch("worker.windows_tasks.subprocess.run") as mock_run:
+            mock_run.return_value = mock.MagicMock(returncode=0, stdout="", stderr="")
             cfg = BootstrapConfig(
                 api_token="tok",
                 redis_url="redis://localhost:6379",
@@ -480,8 +483,8 @@ class TestActionInstall:
         """Calling install twice should succeed without errors."""
         with mock.patch("worker.bootstrap._IS_WINDOWS", True), \
              mock.patch("worker.windows_tasks._IS_WINDOWS", True), \
-             mock.patch("worker.windows_tasks.run_schtasks") as mock_run:
-            mock_run.return_value = mock.MagicMock(stdout="")
+             mock.patch("worker.windows_tasks.subprocess.run") as mock_run:
+            mock_run.return_value = mock.MagicMock(returncode=0, stdout="", stderr="")
             cfg = BootstrapConfig(
                 api_token="tok",
                 redis_url="redis://localhost:6379",
