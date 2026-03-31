@@ -23,6 +23,14 @@ from ..utils.schedule import initialize_schedule
 
 router = APIRouter()
 
+
+def _apply_retry_count(payload: dict) -> dict:
+    """Map the simplified retry_count field to max_retries and strip it."""
+    retry_count = payload.pop("retry_count", None)
+    if retry_count is not None and not payload.get("max_retries"):
+        payload["max_retries"] = retry_count
+    return payload
+
 MASKED_SECRET = "********"
 
 
@@ -195,7 +203,7 @@ def list_jobs(request: Request):
 def submit_job(job: JobCreate, request: Request):
     db = get_db()
     domain = getattr(request.state, "domain", "prod")
-    payload = job.model_dump()
+    payload = _apply_retry_count(job.model_dump())
     payload["domain"] = domain
     job_def = JobDefinition(**payload)
     validation = _validate_job_definition(job_def)
@@ -433,7 +441,7 @@ def run_adhoc_job(job: JobCreate, request: Request):
     db = get_db()
     domain = getattr(request.state, "domain", "prod")
     adhoc_schedule = ScheduleConfig(mode="immediate", enabled=False)
-    job_dict = job.model_dump()
+    job_dict = _apply_retry_count(job.model_dump())
     job_dict["schedule"] = adhoc_schedule.model_dump()
     job_dict["domain"] = domain
     job_def = JobDefinition(**job_dict)

@@ -101,7 +101,7 @@ class JobDefinition(BaseModel):
 class JobCreate(BaseModel):
     name: str
     user: str = "default"
-    domain: str = "prod"
+    domain: str = Field(default="prod", deprecated=True)  # Ignored; derived from API token
     bypass_concurrency: bool = False
     global_locks: List[str] = Field(default_factory=list)
     source: Optional[SourceConfig] = None
@@ -114,6 +114,7 @@ class JobCreate(BaseModel):
     completion: CompletionCriteria = Field(default_factory=CompletionCriteria)
     tags: List[str] = Field(default_factory=list)
     depends_on: List[str] = Field(default_factory=list)
+    retry_count: Optional[int] = Field(default=None, description="Simplified retry setting; maps to max_retries when set")
     max_retries: int = 0
     retry_delay_seconds: int = 0
     on_failure_webhooks: List[str] = Field(default_factory=list)

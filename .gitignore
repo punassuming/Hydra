@@ -10,5 +10,7 @@ ui/cypress/videos/
 ui/src/*.js
 ui/src/*.js.map
 .resume
+.claude
+hydra_worker.egg-info
 go-worker/hydra-go-worker
 go-worker/hydra-go-worker-*

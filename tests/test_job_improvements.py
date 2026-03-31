@@ -321,3 +321,64 @@ def test_resolve_credential_refs_skips_inline_uri():
     }
     resolved = _resolve_credential_refs(job, None)
     assert resolved["executor"]["connection_uri"] == "existing://uri"
+
+
+# ── retry_count convenience field ────────────────────────────────────
+
+
+def test_retry_count_maps_to_max_retries():
+    """retry_count on JobCreate should map to max_retries when max_retries is 0."""
+    from scheduler.models.job_definition import JobCreate
+    from scheduler.api.jobs import _apply_retry_count
+
+    job = JobCreate(
+        name="retry-test",
+        executor=ShellExecutor(script="echo hi"),
+        retry_count=3,
+    )
+    payload = _apply_retry_count(job.model_dump())
+    assert payload["max_retries"] == 3
+    assert "retry_count" not in payload
+
+
+def test_retry_count_does_not_override_explicit_max_retries():
+    """If max_retries is explicitly set, retry_count should not override it."""
+    from scheduler.models.job_definition import JobCreate
+    from scheduler.api.jobs import _apply_retry_count
+
+    job = JobCreate(
+        name="retry-test",
+        executor=ShellExecutor(script="echo hi"),
+        retry_count=5,
+        max_retries=2,
+    )
+    payload = _apply_retry_count(job.model_dump())
+    assert payload["max_retries"] == 2
+    assert "retry_count" not in payload
+
+
+def test_retry_count_none_leaves_max_retries_unchanged():
+    """When retry_count is None, max_retries defaults should be preserved."""
+    from scheduler.models.job_definition import JobCreate
+    from scheduler.api.jobs import _apply_retry_count
+
+    job = JobCreate(
+        name="no-retry",
+        executor=ShellExecutor(script="echo hi"),
+    )
+    payload = _apply_retry_count(job.model_dump())
+    assert payload["max_retries"] == 0
+    assert "retry_count" not in payload
+
+
+def test_job_create_domain_deprecated():
+    """JobCreate still accepts domain but it should be deprecated."""
+    from scheduler.models.job_definition import JobCreate
+
+    job = JobCreate(
+        name="domain-test",
+        executor=ShellExecutor(script="echo hi"),
+        domain="staging",
+    )
+    # Field accepted but the API overwrites it -- just verify the model works.
+    assert job.domain == "staging"

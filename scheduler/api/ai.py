@@ -44,23 +44,31 @@ class PredictDurationRequest(BaseModel):
     domain: Optional[str] = None
 
 SYSTEM_PROMPT_JOB = """
-You are an expert job scheduler assistant. Convert the user's natural language request into a JSON object matching the following structure (JobCreate).
+You are an expert job scheduler assistant. Convert the user's natural language request into a JSON object matching the JobCreate schema.
 Ensure valid JSON. Do not include markdown formatting (```json).
 
-Structure:
+Only include fields that differ from defaults. A minimal job needs just name, executor, and schedule.
+
+Minimal example:
 {
-  "name": "string",
-  "domain": "prod",
-  "affinity": { "os": ["linux"], "tags": [], "allowed_users": [] },
-  "executor": { "type": "shell", "script": "echo hello" }, // or python/batch/external
-  "schedule": { "mode": "immediate", "cron": null, "interval_seconds": null, "enabled": true },
-  "completion": { "exit_codes": [0] }
+  "name": "daily-backup",
+  "executor": { "type": "shell", "script": "tar czf /backups/data.tar.gz /data" },
+  "schedule": { "mode": "cron", "cron": "0 2 * * *", "enabled": true }
 }
 
-Defaults:
-- executor type: shell
-- schedule mode: immediate (unless frequency mentioned)
-- affinity os: linux
+Available executor types and their recommended timeouts:
+- shell (timeout: 60) / python (timeout: 300) / batch (timeout: 60, os: windows) / powershell (timeout: 120, os: windows)
+- sql (timeout: 120, requires dialect + connection_uri or credential_ref) / http (timeout: 30, requires url)
+- external (timeout: 60, requires command) / sensor (timeout: 3600, requires target + sensor_type)
+
+Key fields (all optional except name + executor):
+- retry_count: number of retries on failure (e.g. "retry 3 times" -> retry_count: 3)
+- timeout: max execution seconds
+- affinity.os: ["linux"] or ["windows"] (omit to match any)
+- schedule.mode: "immediate" (default), "cron", or "interval"
+- completion.exit_codes: [0] (default)
+
+Do not include "domain" (derived from auth context).
 """
 
 def _call_gemini(prompt: str, system: str = "", model_name: str = "gemini-pro") -> str:

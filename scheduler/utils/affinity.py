@@ -36,6 +36,21 @@ def executor_types_match(job_exec_types: List[str], worker_capabilities: List[st
     return all(t.lower() in worker_set for t in job_exec_types)
 
 
+def normalize_affinity(job: Dict) -> Dict:
+    """Ensure affinity.executor_types is populated from the job's executor type.
+
+    This allows jobs to omit executor_types in their affinity and still get
+    correct capability-based worker matching at dispatch time.
+    """
+    executor_type = (job.get("executor") or {}).get("type", "")
+    if not executor_type:
+        return job
+    affinity = job.get("affinity") or {}
+    if not affinity.get("executor_types"):
+        return {**job, "affinity": {**affinity, "executor_types": [executor_type]}}
+    return job
+
+
 def passes_affinity(job: Dict, worker: Dict) -> bool:
     affinity = job.get("affinity", {})
     executor = job.get("executor", {})

@@ -6,7 +6,15 @@ build-backend = "setuptools.build_meta"
 name = "hydra-worker"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["redis==5.0.8"]
+dependencies = [
+    "croniter>=6.2.2",
+    "cryptography>=46.0.6",
+    "fastapi>=0.135.2",
+    "pydantic>=2.12.5",
+    "pymongo>=4.16.0",
+    "pytest>=9.0.2",
+    "redis==5.0.8",
+]
 
 [tool.setuptools.packages.find]
 include = ["worker*"]

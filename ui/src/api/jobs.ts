@@ -32,6 +32,7 @@ export interface JobPayload {
   completion: CompletionCriteria;
   tags?: string[];
   depends_on?: string[];
+  retry_count?: number | null;
   max_retries?: number;
   retry_delay_seconds?: number;
   on_failure_webhooks?: string[];

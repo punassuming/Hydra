@@ -1,4 +1,4 @@
-from scheduler.utils.affinity import passes_affinity
+from scheduler.utils.affinity import normalize_affinity, passes_affinity
 from scheduler.utils.selectors import select_best_worker
 from scheduler.models.job_definition import JobDefinition, Affinity, ScheduleConfig
 from scheduler.models.executor import ShellExecutor, PythonExecutor
@@ -1048,3 +1048,71 @@ def test_job_definition_default_affinity():
     assert job.affinity is not None
     assert job.affinity.os == []
     assert job.affinity.tags == []
+
+
+# ── normalize_affinity tests ─────────────────────────────────────────
+
+
+def test_normalize_affinity_injects_executor_type():
+    """When executor_types is empty, normalize_affinity derives it from executor.type."""
+    job = {
+        "executor": {"type": "python", "code": "print(1)"},
+        "affinity": {"os": ["linux"], "tags": []},
+    }
+    normalized = normalize_affinity(job)
+    assert normalized["affinity"]["executor_types"] == ["python"]
+    # Original job dict should not be mutated.
+    assert "executor_types" not in job["affinity"]
+
+
+def test_normalize_affinity_preserves_explicit_executor_types():
+    """When executor_types is already set, normalize_affinity keeps it."""
+    job = {
+        "executor": {"type": "python", "code": "print(1)"},
+        "affinity": {"os": ["linux"], "executor_types": ["python", "sql"]},
+    }
+    normalized = normalize_affinity(job)
+    assert normalized["affinity"]["executor_types"] == ["python", "sql"]
+
+
+def test_normalize_affinity_no_executor():
+    """Job without executor should pass through unchanged."""
+    job = {"affinity": {"os": ["linux"]}}
+    assert normalize_affinity(job) is job
+
+
+def test_normalize_affinity_empty_affinity():
+    """Job without affinity key should still get executor_types injected."""
+    job = {"executor": {"type": "shell", "script": "echo hi"}}
+    normalized = normalize_affinity(job)
+    assert normalized["affinity"]["executor_types"] == ["shell"]
+
+
+def test_normalize_affinity_works_with_passes_affinity():
+    """End-to-end: job without executor_types should still match capable workers."""
+    job = {
+        "user": "alice",
+        "executor": {"type": "sql", "query": "SELECT 1"},
+        "affinity": {"os": ["linux"]},
+    }
+    worker_with_sql = {
+        "os": "linux",
+        "tags": [],
+        "allowed_users": [],
+        "hostname": "",
+        "subnet": "",
+        "deployment_type": "",
+        "capabilities": ["shell", "python", "sql", "http", "sensor"],
+    }
+    worker_without_sql = {
+        "os": "linux",
+        "tags": [],
+        "allowed_users": [],
+        "hostname": "",
+        "subnet": "",
+        "deployment_type": "",
+        "capabilities": ["shell", "python", "http"],
+    }
+    normalized = normalize_affinity(job)
+    assert passes_affinity(normalized, worker_with_sql)
+    assert not passes_affinity(normalized, worker_without_sql)

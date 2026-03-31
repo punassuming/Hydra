@@ -11,7 +11,7 @@ from pymongo import ReturnDocument
 from .redis_client import get_redis
 from .mongo_client import get_db
 from .utils.auth import get_domain_token_hash
-from .utils.affinity import passes_affinity
+from .utils.affinity import normalize_affinity, passes_affinity
 from .utils.selectors import select_best_worker
 from .utils.failover import failover_once
 from .utils.logging import setup_logging
@@ -261,6 +261,7 @@ def scheduling_loop(stop_event: threading.Event):
             # Sensor jobs are dispatched through the normal worker path.
             # Workers execute the sensor polling loop directly, keeping the
             # scheduler free from external workload polling.
+            job = normalize_affinity(job)
             candidates = [
                 w
                 for w in list_online_workers(ttl, domain, respect_capacity=not bypass_concurrency)
@@ -576,6 +577,7 @@ def backfill_dispatch_loop(stop_event: threading.Event):
             domain = job.get("domain", domain)
             bypass_concurrency = bool(job.get("bypass_concurrency", False))
 
+            job = normalize_affinity(job)
             candidates = [
                 w
                 for w in list_online_workers(ttl, domain, respect_capacity=not bypass_concurrency)
