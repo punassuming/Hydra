@@ -10,10 +10,20 @@ type DeploymentMode = "docker" | "bare" | "windows" | "kubernetes";
 function CodeBlock({ code }: { code: string }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = () => {
-    navigator.clipboard.writeText(code).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    if (!navigator.clipboard) {
+      setCopied(false);
+      return;
+    }
+    navigator.clipboard.writeText(code).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      },
+      () => {
+        // Clipboard write failed (non-secure context, denied permission, etc.)
+        // No-op — the user can still select and copy the text manually.
+      }
+    );
   };
   return (
     <div style={{ position: "relative", marginBottom: 8 }}>

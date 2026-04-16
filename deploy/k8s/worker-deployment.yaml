@@ -18,10 +18,14 @@ spec:
           # Domain credentials (API_TOKEN, REDIS_PASSWORD, DOMAIN) are injected
           # from a Kubernetes Secret created by scripts/start-domain-workers.sh:
           #   WORKER_BACKEND=k8s ADMIN_TOKEN=... ./scripts/start-domain-workers.sh <domain> <scale>
-          # The secret name follows the pattern: hydra-worker-<domain>
+          # The script names the secret hydra-worker-<domain> (e.g. hydra-worker-prod).
+          #
+          # NOTE: Replace the secret name below to match your domain, or apply this
+          # manifest via a Kustomize overlay / Helm values file that substitutes the
+          # domain-specific secret name rather than editing this file directly.
           envFrom:
             - secretRef:
-                name: hydra-worker-prod  # replace "prod" with your domain name
+                name: hydra-worker-prod  # REPLACE: hydra-worker-<your-domain>
           env:
             - name: REDIS_URL
               value: redis://hydra-redis:6379/0

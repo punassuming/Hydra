@@ -141,6 +141,7 @@ def worker_main():
         continue to work across transient Redis disconnects.
         """
         while True:
+            pubsub = None
             try:
                 sub_r = get_redis()
                 pubsub = sub_r.pubsub()
@@ -159,6 +160,12 @@ def worker_main():
             except Exception as exc:
                 print(f"Worker {worker_id} kill listener error: {exc}; restarting in 2s")
                 time.sleep(2)
+            finally:
+                if pubsub is not None:
+                    try:
+                        pubsub.close()
+                    except Exception:
+                        pass
 
     threading.Thread(target=_kill_listener, daemon=True).start()
 

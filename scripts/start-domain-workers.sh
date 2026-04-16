@@ -95,8 +95,10 @@ case "${WORKER_BACKEND}" in
     kubectl -n "${K8S_NAMESPACE}" rollout status "deployment/${K8S_DEPLOYMENT}" --timeout=120s || true
     ;;
   bare)
-    echo "Bare-metal env prepared in ${env_file}"
-    echo "export DOMAIN='${DOMAIN}' API_TOKEN='${API_TOKEN}' REDIS_PASSWORD='${REDIS_PASSWORD}'"
+    echo "Bare-metal credentials ready. Export these in your shell or .env file:"
+    echo "  export DOMAIN='${DOMAIN}'"
+    echo "  export API_TOKEN='${API_TOKEN}'"
+    echo "  export REDIS_PASSWORD='${REDIS_PASSWORD}'"
     if [[ -n "${BARE_START_CMD}" ]]; then
       echo "Running bare-metal command with env:"
       DOMAIN="${DOMAIN}" API_TOKEN="${API_TOKEN}" REDIS_PASSWORD="${REDIS_PASSWORD}" bash -lc "${BARE_START_CMD}"
@@ -127,4 +129,4 @@ for w in workers:
     print(f"- {w.get('worker_id')} ({w.get('connectivity_status')}/{w.get('dispatch_status')})")
 PY
 
-echo "Done. (Temporary credentials file ${env_file} will be removed on exit.)"
+echo "Done."
