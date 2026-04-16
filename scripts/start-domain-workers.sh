@@ -20,8 +20,12 @@ K8S_SECRET_PREFIX="${K8S_SECRET_PREFIX:-hydra-worker}"
 BARE_START_CMD="${BARE_START_CMD:-}"
 
 env_file="/tmp/hydra-worker-${DOMAIN}.env"
-# Always remove the temp credentials file on exit (success or error).
-trap 'rm -f "${env_file}"' EXIT
+# Remove the temp credentials file automatically for transient backends,
+# but keep it for bare mode because the user is expected to consume it
+# after this script exits.
+if [[ "${WORKER_BACKEND}" != "bare" ]]; then
+  trap 'rm -f "${env_file}"' EXIT
+fi
 
 if [[ -z "${ADMIN_TOKEN}" ]]; then
   echo "ADMIN_TOKEN is required"
