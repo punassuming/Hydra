@@ -135,24 +135,44 @@ def worker_main():
         r.expire(f"run_events:{domain}", 24 * 3600)
 
     def _kill_listener():
-        """Subscribe to job_kill:{domain} and set the kill event for matching run_ids."""
-        sub_r = get_redis()
-        pubsub = sub_r.pubsub()
-        pubsub.subscribe(f"job_kill:{domain}")
-        try:
-            for msg in pubsub.listen():
-                if msg.get("type") != "message":
-                    continue
-                raw = msg.get("data") or b""
-                run_id = (raw.decode("utf-8") if isinstance(raw, bytes) else raw).strip()
-                if not run_id:
-                    continue
-                with active_kill_lock:
-                    evt = active_kill_events.get(run_id)
-                if evt is not None:
-                    evt.set()
-        except Exception:
-            pass
+        """Subscribe to job_kill:{domain} and set the kill event for matching run_ids.
+
+        Restarts automatically on any Redis/connection error with exponential
+        backoff (2 s → 4 s → … → 60 s) so that transient disconnects recover
+        quickly while persistent auth/config failures don't spam the logs.
+        """
+        _BACKOFF_INITIAL = 2.0
+        _BACKOFF_MAX = 60.0
+        backoff = _BACKOFF_INITIAL
+        while True:
+            pubsub = None
+            try:
+                sub_r = get_redis()
+                pubsub = sub_r.pubsub()
+                pubsub.subscribe(f"job_kill:{domain}")
+                # Successful connection — reset backoff.
+                backoff = _BACKOFF_INITIAL
+                for msg in pubsub.listen():
+                    if msg.get("type") != "message":
+                        continue
+                    raw = msg.get("data") or b""
+                    run_id = (raw.decode("utf-8") if isinstance(raw, bytes) else raw).strip()
+                    if not run_id:
+                        continue
+                    with active_kill_lock:
+                        evt = active_kill_events.get(run_id)
+                    if evt is not None:
+                        evt.set()
+            except Exception as exc:
+                print(f"Worker {worker_id} kill listener error: {exc}; retrying in {backoff:.0f}s")
+                time.sleep(backoff)
+                backoff = min(backoff * 2, _BACKOFF_MAX)
+            finally:
+                if pubsub is not None:
+                    try:
+                        pubsub.close()
+                    except Exception:
+                        pass
 
     threading.Thread(target=_kill_listener, daemon=True).start()
 

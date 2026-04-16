@@ -13,7 +13,7 @@ from .api.credentials import router as credentials_router
 from .api.domain import router as domain_router
 from .api.ai import router as ai_router
 from .orchestrator import OrchestratorManager, create_standard_orchestrator
-from .startup import ensure_admin_token, ensure_domains_seeded
+from .startup import ensure_admin_token, ensure_domains_seeded, warn_credential_encryption_key
 from .utils.logging import setup_logging
 from .utils.auth import enforce_api_key
 
@@ -65,6 +65,7 @@ _orchestrator: OrchestratorManager | None = None
 def on_startup():
     global _orchestrator
     ensure_admin_token()
+    warn_credential_encryption_key()
     ensure_domains_seeded()
     if HYDRA_MODE == "api":
         log.info(

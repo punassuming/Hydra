@@ -1,11 +1,13 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, Col, Progress, Row, Space, Statistic, Table, Tag, Tooltip, Typography, Button, Popconfirm, message, List, Tabs } from "antd";
+import { PlusOutlined } from "@ant-design/icons";
 import { detachWorker, fetchHistory, fetchWorkerOperations, fetchWorkers } from "../api/jobs";
 import { WorkerInfo } from "../types";
 import { apiClient } from "../api/client";
 import { useNavigate } from "react-router-dom";
 import { useActiveDomain } from "../context/ActiveDomainContext";
+import { WorkerSetupDrawer } from "../components/WorkerSetupDrawer";
 
 function connectivityTag(status?: string) {
   const normalized = status === "online" ? "online" : "offline";
@@ -21,6 +23,7 @@ function dispatchTag(state?: string) {
 export function WorkersPage() {
   const queryClient = useQueryClient();
   const { domain } = useActiveDomain();
+  const [setupDrawerOpen, setSetupDrawerOpen] = useState(false);
   const { data, isLoading } = useQuery({ queryKey: ["workers", domain], queryFn: fetchWorkers, refetchInterval: 5000 });
   const historyQuery = useQuery({ queryKey: ["history", domain], queryFn: fetchHistory, refetchInterval: 5000 });
   const navigate = useNavigate();
@@ -250,12 +253,24 @@ export function WorkersPage() {
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
-      <Typography.Title level={3} style={{ marginBottom: 0 }}>
-        Worker Capabilities
-      </Typography.Title>
-      <Typography.Text type="secondary">
-        Inspect deployments, advertised runtimes, and placement hints to design new affinities.
-      </Typography.Text>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <Typography.Title level={3} style={{ marginBottom: 0 }}>
+            Worker Capabilities
+          </Typography.Title>
+          <Typography.Text type="secondary">
+            Inspect deployments, advertised runtimes, and placement hints to design new affinities.
+          </Typography.Text>
+        </div>
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          onClick={() => setSetupDrawerOpen(true)}
+        >
+          Connect Worker
+        </Button>
+      </div>
+      <WorkerSetupDrawer open={setupDrawerOpen} onClose={() => setSetupDrawerOpen(false)} />
       <Row gutter={16}>
         <Col xs={24} md={6}>
           <Card>

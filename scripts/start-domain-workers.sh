@@ -19,6 +19,15 @@ K8S_DEPLOYMENT="${K8S_DEPLOYMENT:-hydra-worker}"
 K8S_SECRET_PREFIX="${K8S_SECRET_PREFIX:-hydra-worker}"
 BARE_START_CMD="${BARE_START_CMD:-}"
 
+env_file="$(mktemp /tmp/hydra-worker-XXXXXX.env)"
+chmod 600 "${env_file}"
+# Remove the temp credentials file automatically for transient backends.
+# For bare mode the file is left in place so the user can source it;
+# it will be cleaned up on the next run or manually.
+if [[ "${WORKER_BACKEND}" != "bare" ]]; then
+  trap 'rm -f "${env_file}"' EXIT
+fi
+
 if [[ -z "${ADMIN_TOKEN}" ]]; then
   echo "ADMIN_TOKEN is required"
   echo "Usage: ADMIN_TOKEN=<admin_token> $0 <domain> [scale]"
@@ -63,7 +72,6 @@ if [[ -z "${API_TOKEN}" || -z "${REDIS_PASSWORD}" ]]; then
   exit 1
 fi
 
-env_file="/tmp/hydra-worker-${DOMAIN}.env"
 {
   echo "DOMAIN=${DOMAIN}"
   echo "API_TOKEN=${API_TOKEN}"
@@ -92,8 +100,10 @@ case "${WORKER_BACKEND}" in
     kubectl -n "${K8S_NAMESPACE}" rollout status "deployment/${K8S_DEPLOYMENT}" --timeout=120s || true
     ;;
   bare)
-    echo "Bare-metal env prepared in ${env_file}"
-    echo "export DOMAIN='${DOMAIN}' API_TOKEN='${API_TOKEN}' REDIS_PASSWORD='${REDIS_PASSWORD}'"
+    echo "Bare-metal credentials ready. Export these in your shell or .env file:"
+    echo "  export DOMAIN='${DOMAIN}'"
+    echo "  export API_TOKEN='${API_TOKEN}'"
+    echo "  export REDIS_PASSWORD='${REDIS_PASSWORD}'"
     if [[ -n "${BARE_START_CMD}" ]]; then
       echo "Running bare-metal command with env:"
       DOMAIN="${DOMAIN}" API_TOKEN="${API_TOKEN}" REDIS_PASSWORD="${REDIS_PASSWORD}" bash -lc "${BARE_START_CMD}"
@@ -104,7 +114,9 @@ case "${WORKER_BACKEND}" in
   print)
     echo "No deployment command executed (WORKER_BACKEND=print)."
     echo "Use this env in your platform:"
-    cat "${env_file}"
+    echo "DOMAIN=${DOMAIN}"
+    echo "API_TOKEN=${API_TOKEN}"
+    echo "REDIS_PASSWORD=${REDIS_PASSWORD}"
     ;;
   *)
     echo "Unsupported WORKER_BACKEND=${WORKER_BACKEND}. Use docker|k8s|bare|print."
@@ -122,4 +134,4 @@ for w in workers:
     print(f"- {w.get('worker_id')} ({w.get('connectivity_status')}/{w.get('dispatch_status')})")
 PY
 
-echo "Saved runtime env to ${env_file}"
+echo "Done."

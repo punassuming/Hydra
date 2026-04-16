@@ -38,6 +38,10 @@ services:
       - MONGO_URL=mongodb://mongo:27017
       - MONGO_DB=hydra_jobs
       - SCHEDULER_HEARTBEAT_TTL=10
+      # Thread the API_TOKEN through as the seed token so the bundled worker
+      # can connect on first boot without any extra provisioning steps.
+      - SEED_DOMAIN_TOKEN=${API_TOKEN:-}
+      - SEED_DOMAIN_REDIS_PASSWORD=${REDIS_PASSWORD:-}
     depends_on:
       redis:
         condition: service_healthy
