@@ -135,24 +135,30 @@ def worker_main():
         r.expire(f"run_events:{domain}", 24 * 3600)
 
     def _kill_listener():
-        """Subscribe to job_kill:{domain} and set the kill event for matching run_ids."""
-        sub_r = get_redis()
-        pubsub = sub_r.pubsub()
-        pubsub.subscribe(f"job_kill:{domain}")
-        try:
-            for msg in pubsub.listen():
-                if msg.get("type") != "message":
-                    continue
-                raw = msg.get("data") or b""
-                run_id = (raw.decode("utf-8") if isinstance(raw, bytes) else raw).strip()
-                if not run_id:
-                    continue
-                with active_kill_lock:
-                    evt = active_kill_events.get(run_id)
-                if evt is not None:
-                    evt.set()
-        except Exception:
-            pass
+        """Subscribe to job_kill:{domain} and set the kill event for matching run_ids.
+
+        Restarts automatically on any Redis/connection error so that kill commands
+        continue to work across transient Redis disconnects.
+        """
+        while True:
+            try:
+                sub_r = get_redis()
+                pubsub = sub_r.pubsub()
+                pubsub.subscribe(f"job_kill:{domain}")
+                for msg in pubsub.listen():
+                    if msg.get("type") != "message":
+                        continue
+                    raw = msg.get("data") or b""
+                    run_id = (raw.decode("utf-8") if isinstance(raw, bytes) else raw).strip()
+                    if not run_id:
+                        continue
+                    with active_kill_lock:
+                        evt = active_kill_events.get(run_id)
+                    if evt is not None:
+                        evt.set()
+            except Exception as exc:
+                print(f"Worker {worker_id} kill listener error: {exc}; restarting in 2s")
+                time.sleep(2)
 
     threading.Thread(target=_kill_listener, daemon=True).start()
 

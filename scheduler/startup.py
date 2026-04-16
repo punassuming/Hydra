@@ -34,6 +34,29 @@ def ensure_admin_token() -> None:
         pass
 
 
+def warn_credential_encryption_key() -> None:
+    """Warn loudly when CREDENTIAL_ENCRYPTION_KEY is not explicitly set.
+
+    Without an explicit key, the encryption key is derived from ADMIN_TOKEN.
+    This means that rotating ADMIN_TOKEN will silently make all stored
+    credentials (database URIs, PAT tokens, SMTP passwords) unreadable.
+    Set CREDENTIAL_ENCRYPTION_KEY to a stable 32-byte base64-url value in
+    production to decouple credential encryption from admin token rotation.
+
+    Generate a key with:
+        python -c "import secrets,base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"
+    """
+    if not os.getenv("CREDENTIAL_ENCRYPTION_KEY", "").strip():
+        log.warning(
+            "CREDENTIAL_ENCRYPTION_KEY is not set. Credential encryption key is being "
+            "derived from ADMIN_TOKEN. IMPORTANT: rotating ADMIN_TOKEN will make all "
+            "stored credentials unreadable. Set CREDENTIAL_ENCRYPTION_KEY to a stable "
+            "32-byte base64-url value for production use. Generate one with: "
+            "python -c \"import secrets,base64; "
+            "print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())\""
+        )
+
+
 def ensure_domains_seeded() -> None:
     """Cache existing domain token hashes into Redis; seed a default domain if none exist.
 

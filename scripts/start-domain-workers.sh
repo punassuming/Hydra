@@ -19,6 +19,10 @@ K8S_DEPLOYMENT="${K8S_DEPLOYMENT:-hydra-worker}"
 K8S_SECRET_PREFIX="${K8S_SECRET_PREFIX:-hydra-worker}"
 BARE_START_CMD="${BARE_START_CMD:-}"
 
+env_file="/tmp/hydra-worker-${DOMAIN}.env"
+# Always remove the temp credentials file on exit (success or error).
+trap 'rm -f "${env_file}"' EXIT
+
 if [[ -z "${ADMIN_TOKEN}" ]]; then
   echo "ADMIN_TOKEN is required"
   echo "Usage: ADMIN_TOKEN=<admin_token> $0 <domain> [scale]"
@@ -63,7 +67,6 @@ if [[ -z "${API_TOKEN}" || -z "${REDIS_PASSWORD}" ]]; then
   exit 1
 fi
 
-env_file="/tmp/hydra-worker-${DOMAIN}.env"
 {
   echo "DOMAIN=${DOMAIN}"
   echo "API_TOKEN=${API_TOKEN}"
@@ -104,7 +107,9 @@ case "${WORKER_BACKEND}" in
   print)
     echo "No deployment command executed (WORKER_BACKEND=print)."
     echo "Use this env in your platform:"
-    cat "${env_file}"
+    echo "DOMAIN=${DOMAIN}"
+    echo "API_TOKEN=${API_TOKEN}"
+    echo "REDIS_PASSWORD=${REDIS_PASSWORD}"
     ;;
   *)
     echo "Unsupported WORKER_BACKEND=${WORKER_BACKEND}. Use docker|k8s|bare|print."
@@ -122,4 +127,4 @@ for w in workers:
     print(f"- {w.get('worker_id')} ({w.get('connectivity_status')}/{w.get('dispatch_status')})")
 PY
 
-echo "Saved runtime env to ${env_file}"
+echo "Done. (Temporary credentials file ${env_file} will be removed on exit.)"

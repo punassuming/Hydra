@@ -7,7 +7,11 @@ def get_worker_id() -> str:
     configured = (os.getenv("WORKER_ID") or "").strip()
     if configured:
         return configured
-    return f"worker-{platform.node()}-{os.getpid()}"
+    # Use hostname only (no PID) so the worker re-registers under the same ID
+    # after a container restart, preventing ghost "offline" records from
+    # accumulating in the UI. Set WORKER_ID explicitly when running multiple
+    # workers on the same host.
+    return f"worker-{platform.node()}"
 
 
 def get_tags() -> List[str]:
