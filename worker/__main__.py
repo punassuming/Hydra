@@ -22,6 +22,16 @@ from __future__ import annotations
 
 import os
 import sys
+from urllib.parse import urlparse
+
+
+def _url_has_credentials(url: str) -> bool:
+    """Return True if *url* contains both a username and a password component."""
+    try:
+        parsed = urlparse(url)
+        return bool(parsed.username and parsed.password)
+    except Exception:
+        return False
 
 
 def _preflight_check() -> None:
@@ -39,17 +49,20 @@ def _preflight_check() -> None:
         sys.exit(1)
 
     require_acl = (os.getenv("WORKER_REQUIRE_REDIS_ACL", "true") or "true").strip().lower()
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     if require_acl not in ("0", "false", "no", "off"):
         redis_password = (os.getenv("REDIS_PASSWORD") or "").strip()
-        if not redis_password:
+        # Credentials can be supplied as REDIS_PASSWORD (with DOMAIN as username)
+        # OR embedded directly in REDIS_URL — both are valid; mirror redis_client.py.
+        if not redis_password and not _url_has_credentials(redis_url):
             print("[hydra] ERROR: REDIS_PASSWORD is not set (WORKER_REQUIRE_REDIS_ACL=true).", file=sys.stderr)
-            print("[hydra]   Set REDIS_PASSWORD to the domain Redis ACL password.", file=sys.stderr)
-            print("[hydra]   Rotate it via POST /admin/domains/<domain>/redis_acl/rotate", file=sys.stderr)
-            print("[hydra]   or set WORKER_REQUIRE_REDIS_ACL=false to skip ACL enforcement.", file=sys.stderr)
+            print("[hydra]   Option A: set REDIS_PASSWORD (and DOMAIN) for ACL authentication.", file=sys.stderr)
+            print("[hydra]   Option B: embed credentials in REDIS_URL (redis://user:pass@host:port/db).", file=sys.stderr)
+            print("[hydra]   Option C: set WORKER_REQUIRE_REDIS_ACL=false to skip ACL enforcement.", file=sys.stderr)
+            print("[hydra]   Rotate ACL credentials via POST /admin/domains/<domain>/redis_acl/rotate", file=sys.stderr)
             sys.exit(1)
 
     # Attempt a Redis ping to catch connection/auth issues with a clear message.
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     try:
         from .redis_client import get_redis
         r = get_redis()

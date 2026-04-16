@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Button, Drawer, Radio, Space, Steps, Tag, Typography, Alert, Divider } from "antd";
+import { Button, Drawer, Radio, Space, Steps, Tag, Tooltip, Typography, Alert, Divider } from "antd";
 import { CopyOutlined, CheckOutlined } from "@ant-design/icons";
 import { useActiveDomain } from "../context/ActiveDomainContext";
 
@@ -43,12 +43,15 @@ function CodeBlock({ code }: { code: string }) {
       >
         {code}
       </pre>
-      <Button
-        size="small"
-        icon={copied ? <CheckOutlined /> : <CopyOutlined />}
-        onClick={handleCopy}
-        style={{ position: "absolute", top: 6, right: 6, opacity: 0.7 }}
-      />
+      <Tooltip title={copied ? "Copied!" : "Copy to clipboard"}>
+        <Button
+          size="small"
+          aria-label="Copy command to clipboard"
+          icon={copied ? <CheckOutlined /> : <CopyOutlined />}
+          onClick={handleCopy}
+          style={{ position: "absolute", top: 6, right: 6, opacity: 0.7 }}
+        />
+      </Tooltip>
     </div>
   );
 }

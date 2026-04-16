@@ -137,15 +137,21 @@ def worker_main():
     def _kill_listener():
         """Subscribe to job_kill:{domain} and set the kill event for matching run_ids.
 
-        Restarts automatically on any Redis/connection error so that kill commands
-        continue to work across transient Redis disconnects.
+        Restarts automatically on any Redis/connection error with exponential
+        backoff (2 s → 4 s → … → 60 s) so that transient disconnects recover
+        quickly while persistent auth/config failures don't spam the logs.
         """
+        _BACKOFF_INITIAL = 2.0
+        _BACKOFF_MAX = 60.0
+        backoff = _BACKOFF_INITIAL
         while True:
             pubsub = None
             try:
                 sub_r = get_redis()
                 pubsub = sub_r.pubsub()
                 pubsub.subscribe(f"job_kill:{domain}")
+                # Successful connection — reset backoff.
+                backoff = _BACKOFF_INITIAL
                 for msg in pubsub.listen():
                     if msg.get("type") != "message":
                         continue
@@ -158,8 +164,9 @@ def worker_main():
                     if evt is not None:
                         evt.set()
             except Exception as exc:
-                print(f"Worker {worker_id} kill listener error: {exc}; restarting in 2s")
-                time.sleep(2)
+                print(f"Worker {worker_id} kill listener error: {exc}; retrying in {backoff:.0f}s")
+                time.sleep(backoff)
+                backoff = min(backoff * 2, _BACKOFF_MAX)
             finally:
                 if pubsub is not None:
                     try:

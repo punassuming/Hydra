@@ -19,10 +19,11 @@ K8S_DEPLOYMENT="${K8S_DEPLOYMENT:-hydra-worker}"
 K8S_SECRET_PREFIX="${K8S_SECRET_PREFIX:-hydra-worker}"
 BARE_START_CMD="${BARE_START_CMD:-}"
 
-env_file="/tmp/hydra-worker-${DOMAIN}.env"
-# Remove the temp credentials file automatically for transient backends,
-# but keep it for bare mode because the user is expected to consume it
-# after this script exits.
+env_file="$(mktemp /tmp/hydra-worker-XXXXXX.env)"
+chmod 600 "${env_file}"
+# Remove the temp credentials file automatically for transient backends.
+# For bare mode the file is left in place so the user can source it;
+# it will be cleaned up on the next run or manually.
 if [[ "${WORKER_BACKEND}" != "bare" ]]; then
   trap 'rm -f "${env_file}"' EXIT
 fi
