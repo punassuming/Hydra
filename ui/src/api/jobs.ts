@@ -91,8 +91,10 @@ export const backfillJob = (jobId: string, startDate: string, endDate: string) =
     { start_date: startDate, end_date: endDate },
   );
 
-export const generateJob = (prompt: string, provider: "gemini" | "openai" = "gemini", model?: string) => 
+export const generateJob = (prompt: string, provider: "gemini" | "openai" = "gemini", model?: string) =>
     apiClient.post<JobPayload>("/ai/generate_job", { prompt, provider, model });
+
+export const fetchTemplates = () => apiClient.get<JobPayload[]>("/jobs/templates");
 
 export const analyzeRun = (payload: {
   run_id: string;

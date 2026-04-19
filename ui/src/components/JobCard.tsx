@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import {
   PlayCircleOutlined,
   EditOutlined,
+  CopyOutlined,
   ClockCircleOutlined,
   UserOutlined,
   ThunderboltOutlined,
@@ -15,11 +16,12 @@ interface JobCardProps {
   job: JobDefinition;
   onRun?: () => void;
   onEdit?: () => void;
+  onClone?: () => void;
   selected?: boolean;
   compact?: boolean;
 }
 
-export function JobCard({ job, onRun, onEdit, selected, compact = false }: JobCardProps) {
+export function JobCard({ job, onRun, onEdit, onClone, selected, compact = false }: JobCardProps) {
   const { colors } = useTheme();
   const nextRun = job.schedule?.next_run_at
     ? new Date(job.schedule.next_run_at).toLocaleString()
@@ -44,6 +46,9 @@ export function JobCard({ job, onRun, onEdit, selected, compact = false }: JobCa
               </Tooltip>,
               <Tooltip title="Edit" key="edit">
                 <EditOutlined onClick={onEdit} />
+              </Tooltip>,
+              <Tooltip title="Duplicate" key="clone">
+                <CopyOutlined onClick={onClone} />
               </Tooltip>,
             ]
       }

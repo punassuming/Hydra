@@ -1,4 +1,5 @@
-import { Button, Card, Table, Tag, Space, Segmented, Row, Col } from "antd";
+import { Button, Card, Table, Tag, Space, Segmented, Row, Col, Tooltip } from "antd";
+import { CopyOutlined } from "@ant-design/icons";
 import { Link } from "react-router-dom";
 import { JobDefinition } from "../types";
 import { JobCard } from "./JobCard";
@@ -12,9 +13,10 @@ interface Props {
   loading?: boolean;
   onEdit?: () => void;
   onRun?: (jobId: string) => void;
+  onClone?: (job: JobDefinition) => void;
 }
 
-export function JobList({ jobs, onSelect, selectedId, loading, onEdit, onRun }: Props) {
+export function JobList({ jobs, onSelect, selectedId, loading, onEdit, onRun, onClone }: Props) {
   const [viewMode, setViewMode] = useState<"table" | "card">("table");
   
   const dataSource = (jobs ?? []).map((job) => ({ ...job, key: job._id }));
@@ -59,6 +61,27 @@ export function JobList({ jobs, onSelect, selectedId, loading, onEdit, onRun }: 
       key: "updated_at",
       render: (value: string) => new Date(value).toLocaleString(),
     },
+    ...(onClone
+      ? [
+          {
+            title: "",
+            key: "actions",
+            width: 48,
+            render: (_: unknown, record: JobDefinition) => (
+              <Tooltip title="Duplicate job">
+                <Button
+                  size="small"
+                  icon={<CopyOutlined />}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onClone(record);
+                  }}
+                />
+              </Tooltip>
+            ),
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -113,6 +136,7 @@ export function JobList({ jobs, onSelect, selectedId, loading, onEdit, onRun }: 
                     onSelect(job);
                     onRun?.(job._id);
                   }}
+                  onClone={onClone ? () => onClone(job) : undefined}
                 />
               </div>
             </Col>
