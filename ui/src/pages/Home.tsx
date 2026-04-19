@@ -1,15 +1,17 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Row, Col, Card, Typography, Space, Button, Modal, Divider, Table } from "antd";
+import { ThunderboltOutlined } from "@ant-design/icons";
 import { JobForm } from "../components/JobForm";
 import { JobList } from "../components/JobList";
 import { JobRuns } from "../components/JobRuns";
 import { EventsFeed } from "../components/EventsFeed";
+import { TemplateDrawer } from "../components/TemplateDrawer";
 import { useSchedulerEvents } from "../hooks/useEvents";
 import { createJob, fetchJobs, fetchQueueOverview, JobPayload, runAdhocJob, runJobNow, updateJob, validateJob } from "../api/jobs";
 import { useActiveDomain } from "../context/ActiveDomainContext";
 import { JobsDashboard } from "../components/JobsDashboard";
-import { QueueJobItem } from "../types";
+import { JobDefinition, QueueJobItem } from "../types";
 
 export function HomePage() {
   const queryClient = useQueryClient();
@@ -17,6 +19,8 @@ export function HomePage() {
   const [statusMessage, setStatusMessage] = useState<string>();
   const [validating, setValidating] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
+  const [templateDrawerOpen, setTemplateDrawerOpen] = useState(false);
+  const [templatePayload, setTemplatePayload] = useState<Partial<JobPayload> | null>(null);
   const events = useSchedulerEvents();
   const { domain } = useActiveDomain();
   useEffect(() => {
@@ -118,7 +122,36 @@ export function HomePage() {
 
   const resetSelection = () => {
     setSelectedJobId(null);
+    setTemplatePayload(null);
     setStatusMessage(undefined);
+  };
+
+  const handleClone = (job: JobDefinition) => {
+    const { next_run_at: _nra, ...scheduleRest } = (job.schedule ?? {}) as any;
+    const cleanPayload: Partial<JobPayload> = {
+      name: `${job.name} (copy)`,
+      user: job.user || "default",
+      executor: job.executor as JobPayload["executor"],
+      affinity: job.affinity ?? {},
+      schedule: scheduleRest,
+      completion: job.completion ?? {},
+      tags: job.tags ?? [],
+      depends_on: job.depends_on ?? [],
+      retries: job.retries,
+      timeout: job.timeout,
+      bypass_concurrency: job.bypass_concurrency ?? false,
+      priority: (job as any).priority ?? 5,
+      source: job.source ?? null,
+      max_retries: job.max_retries ?? 0,
+      retry_delay_seconds: job.retry_delay_seconds ?? 0,
+      on_failure_webhooks: job.on_failure_webhooks ?? [],
+      on_failure_email_to: job.on_failure_email_to ?? [],
+      on_failure_email_credential_ref: job.on_failure_email_credential_ref ?? "",
+      sla_max_duration_seconds: job.sla_max_duration_seconds ?? null,
+    };
+    setTemplatePayload(cleanPayload);
+    setSelectedJobId(null);
+    setModalVisible(true);
   };
 
   return (
@@ -135,8 +168,11 @@ export function HomePage() {
           </Col>
           <Col xs={24} md={8} style={{ textAlign: "right" }}>
             <Space wrap>
-              <Button type="primary" onClick={() => setModalVisible(true)}>
+              <Button type="primary" onClick={() => { setTemplatePayload(null); setModalVisible(true); }}>
                 New Job
+              </Button>
+              <Button icon={<ThunderboltOutlined />} onClick={() => setTemplateDrawerOpen(true)}>
+                From Template
               </Button>
               <Button disabled={!selectedJob} onClick={() => setModalVisible(true)}>
                 Edit Selected
@@ -217,6 +253,7 @@ export function HomePage() {
           selectedId={selectedJobId}
           onSelect={(job) => setSelectedJobId(job._id)}
           onEdit={() => setModalVisible(true)}
+          onClone={handleClone}
         />
       </Card>
 
@@ -233,8 +270,18 @@ export function HomePage() {
         </Col>
       </Row>
 
+      <TemplateDrawer
+        open={templateDrawerOpen}
+        onClose={() => setTemplateDrawerOpen(false)}
+        onSelect={(tpl) => {
+          setTemplatePayload(tpl);
+          setSelectedJobId(null);
+          setModalVisible(true);
+        }}
+      />
+
       <Modal
-        title={selectedJob ? `Edit Job – ${selectedJob.name}` : "Create Job"}
+        title={selectedJob ? `Edit Job – ${selectedJob.name}` : templatePayload ? `New Job from Template – ${templatePayload.name ?? ""}` : "Create Job"}
         open={modalVisible}
         onCancel={() => {
           setModalVisible(false);
@@ -246,6 +293,7 @@ export function HomePage() {
       >
         <JobForm
           selectedJob={selectedJob}
+          templatePayload={templatePayload}
           onSubmit={handleSubmit}
           onValidate={handleValidate}
           onManualRun={handleManualRun}

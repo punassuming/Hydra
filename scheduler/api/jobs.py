@@ -166,6 +166,12 @@ def _attach_schedule(job_def: JobDefinition, force: bool = False) -> JobDefiniti
     return job_def.copy(update={"schedule": new_schedule})
 
 
+@router.get("/jobs/templates")
+def list_job_templates():
+    from ..examples.templates import TEMPLATES
+    return TEMPLATES
+
+
 @router.get("/jobs/")
 def list_jobs(request: Request):
     db = get_db()

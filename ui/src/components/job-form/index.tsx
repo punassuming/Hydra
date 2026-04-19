@@ -38,6 +38,8 @@ import { MiscSection } from "./MiscSection";
 
 interface Props {
   selectedJob?: JobDefinition | null;
+  /** Pre-populate the form from a template when creating a new job. Ignored when selectedJob is set. */
+  templatePayload?: Partial<JobPayload> | null;
   onSubmit: (payload: JobPayload) => Promise<void> | void;
   onValidate: (payload: JobPayload) => Promise<ValidationResult | undefined> | ValidationResult | undefined;
   onManualRun: () => void;
@@ -51,6 +53,7 @@ interface Props {
 
 export function JobForm({
   selectedJob,
+  templatePayload,
   onSubmit,
   onValidate,
   onManualRun,
@@ -114,16 +117,8 @@ export function JobForm({
 
   const normalizeExecutor = (exec: JobDefinition["executor"]): JobPayload["executor"] => {
     if (exec.type === "batch" || exec.type === "powershell") {
-      return {
-        type: "shell",
-        script: (exec as any).script ?? "",
-        shell: (exec as any).shell ?? (exec.type === "batch" ? "cmd" : "pwsh"),
-        args: (exec as any).args,
-        env: (exec as any).env,
-        workdir: (exec as any).workdir ?? null,
-        impersonate_user: (exec as any).impersonate_user ?? null,
-        kerberos: (exec as any).kerberos ?? null,
-      };
+      // Keep batch/powershell as-is — they are now first-class executor types in the form.
+      return exec as JobPayload["executor"];
     }
     if (exec.type !== "python") {
       return exec as JobPayload["executor"];
@@ -226,6 +221,28 @@ export function JobForm({
         (selectedJob.on_failure_email_to ?? []).length > 0 || Boolean(selectedJob.on_failure_email_credential_ref),
       );
       setShowAdvanced(hasNonDefaultAdvanced(nextPayload));
+    } else if (templatePayload) {
+      const nextPayload: JobPayload = {
+        ...createDefaultPayload(),
+        ...templatePayload,
+        affinity: { ...createDefaultPayload().affinity, ...(templatePayload.affinity ?? {}) },
+        schedule: { ...createDefaultPayload().schedule, ...(templatePayload.schedule ?? {}) },
+        completion: { ...createDefaultPayload().completion, ...(templatePayload.completion ?? {}) },
+        executor: normalizeExecutor((templatePayload.executor ?? createDefaultPayload().executor) as JobDefinition["executor"]),
+        depends_on: templatePayload.depends_on ?? [],
+        on_failure_webhooks: templatePayload.on_failure_webhooks ?? [],
+        on_failure_email_to: templatePayload.on_failure_email_to ?? [],
+        on_failure_email_credential_ref: templatePayload.on_failure_email_credential_ref ?? "",
+      };
+      const mode: FormScheduleMode =
+        (nextPayload.depends_on?.length ?? 0) > 0 && nextPayload.schedule.mode === "immediate"
+          ? "dependency"
+          : (nextPayload.schedule.mode as FormScheduleMode);
+      setFormScheduleMode(mode);
+      setPayload(nextPayload);
+      setNotifyWebhookEnabled((nextPayload.on_failure_webhooks ?? []).length > 0);
+      setNotifyEmailEnabled((nextPayload.on_failure_email_to ?? []).length > 0 || !!nextPayload.on_failure_email_credential_ref);
+      if (hasNonDefaultAdvanced(nextPayload)) setShowAdvanced(true);
     } else {
       setFormScheduleMode("immediate");
       setPayload(createDefaultPayload());
@@ -236,7 +253,7 @@ export function JobForm({
     setImportError(undefined);
     setLastValidation(undefined);
     userModifiedFields.clear();
-  }, [selectedJob]);
+  }, [selectedJob, templatePayload]);
 
   const executor = payload.executor;
   const executorType = executor.type;
@@ -265,6 +282,10 @@ export function JobForm({
       shell: { type: "shell", script: "echo 'hello world'", shell: "bash" },
       sql: { type: "sql", dialect: "postgres", query: "SELECT 1;", connection_uri: "", database: "" },
       external: { type: "external", command: "/usr/bin/env" },
+      http: { type: "http", url: "", method: "GET", expected_status: [200], timeout_seconds: 30 },
+      sensor: { type: "sensor", sensor_type: "http", target: "", method: "GET", headers: {}, expected_status: [200], poll_interval_seconds: 30, timeout_seconds: 3600 },
+      batch: { type: "batch", script: "echo Hello", shell: "cmd" },
+      powershell: { type: "powershell", script: "Write-Output 'Hello'", shell: "pwsh" },
     };
     const execDefaults = EXECUTOR_DEFAULTS[nextType];
     setPayload((prev) => {
@@ -429,6 +450,10 @@ export function JobForm({
           { label: "Python", value: "python" },
           { label: "SQL / Database", value: "sql" },
           { label: "External Binary", value: "external" },
+          { label: "HTTP Request", value: "http" },
+          { label: "Sensor / Poller", value: "sensor" },
+          { label: "Batch (Windows cmd)", value: "batch" },
+          { label: "PowerShell", value: "powershell" },
         ]}
       />
     </Form.Item>
@@ -593,6 +618,216 @@ export function JobForm({
               placeholder="/opt/jobs"
             />
           </Form.Item>
+        </>
+      )}
+
+      {(executor.type === "batch" || executor.type === "powershell") && (
+        <>
+          <Row gutter={16}>
+            <Col xs={24} md={12}>
+              <Form.Item label="Shell">
+                <Select
+                  value={(executor as any).shell ?? (executor.type === "batch" ? "cmd" : "pwsh")}
+                  onChange={(val) => updateExecutor({ shell: val })}
+                  options={
+                    executor.type === "batch"
+                      ? [{ label: "cmd", value: "cmd" }]
+                      : [
+                          { label: "pwsh", value: "pwsh" },
+                          { label: "powershell", value: "powershell" },
+                        ]
+                  }
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item label="Working Directory">
+                <Input
+                  value={(executor as any).workdir ?? ""}
+                  onChange={(e) => updateExecutor({ workdir: e.target.value || null })}
+                  placeholder="C:\\jobs"
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item label="Script">
+            <Input.TextArea
+              value={(executor as any).script ?? ""}
+              onChange={(e) => updateExecutor({ script: e.target.value })}
+              autoSize={{ minRows: 4, maxRows: 10 }}
+              placeholder={executor.type === "batch" ? "echo Hello from cmd" : "Write-Output 'Hello from PowerShell'"}
+            />
+          </Form.Item>
+        </>
+      )}
+
+      {executor.type === "http" && (
+        <>
+          <Row gutter={16}>
+            <Col xs={24} md={16}>
+              <Form.Item label="URL" required>
+                <Input
+                  value={(executor as any).url ?? ""}
+                  onChange={(e) => updateExecutor({ url: e.target.value })}
+                  placeholder="https://api.example.com/endpoint"
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item label="Method">
+                <Select
+                  value={(executor as any).method ?? "GET"}
+                  onChange={(val) => updateExecutor({ method: val })}
+                  options={[
+                    { label: "GET", value: "GET" },
+                    { label: "POST", value: "POST" },
+                    { label: "PUT", value: "PUT" },
+                    { label: "PATCH", value: "PATCH" },
+                    { label: "DELETE", value: "DELETE" },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={16}>
+            <Col xs={24} md={12}>
+              <Form.Item label="Expected Status Code">
+                <InputNumber
+                  min={100}
+                  max={599}
+                  style={{ width: "100%" }}
+                  value={((executor as any).expected_status as number[])?.[0] ?? 200}
+                  onChange={(val) => updateExecutor({ expected_status: [val ?? 200] })}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item label="Timeout (seconds)">
+                <InputNumber
+                  min={1}
+                  style={{ width: "100%" }}
+                  value={(executor as any).timeout_seconds ?? 30}
+                  onChange={(val) => updateExecutor({ timeout_seconds: val ?? 30 })}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item label="Request Body (JSON)">
+            <Input.TextArea
+              value={(executor as any).body ?? ""}
+              onChange={(e) => updateExecutor({ body: e.target.value })}
+              autoSize={{ minRows: 3 }}
+              placeholder='{"key": "value"}'
+            />
+          </Form.Item>
+          <Form.Item label="Headers (KEY=VALUE per line)">
+            <Input.TextArea
+              value={
+                (executor as any).headers
+                  ? Object.entries((executor as any).headers as Record<string, string>)
+                      .map(([k, v]) => `${k}=${v}`)
+                      .join("\n")
+                  : ""
+              }
+              onChange={(e) => {
+                const headers: Record<string, string> = {};
+                e.target.value.split("\n").forEach((line) => {
+                  const [k, ...rest] = line.split("=");
+                  if (k && rest.length) headers[k.trim()] = rest.join("=").trim();
+                });
+                updateExecutor({ headers });
+              }}
+              autoSize
+              placeholder="Authorization=Bearer token"
+            />
+          </Form.Item>
+        </>
+      )}
+
+      {executor.type === "sensor" && (
+        <>
+          <Row gutter={16}>
+            <Col xs={24} md={8}>
+              <Form.Item label="Sensor Type">
+                <Select
+                  value={(executor as any).sensor_type ?? "http"}
+                  onChange={(val) => updateExecutor({ sensor_type: val })}
+                  options={[
+                    { label: "HTTP", value: "http" },
+                    { label: "SQL", value: "sql" },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={16}>
+              <Form.Item
+                label={(executor as any).sensor_type === "sql" ? "Connection URI" : "Target URL"}
+                required
+              >
+                <Input
+                  value={(executor as any).target ?? ""}
+                  onChange={(e) => updateExecutor({ target: e.target.value })}
+                  placeholder={
+                    (executor as any).sensor_type === "sql"
+                      ? "postgresql://user:pass@host:5432/db"
+                      : "https://api.example.com/health"
+                  }
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+          {(executor as any).sensor_type !== "sql" && (
+            <Row gutter={16}>
+              <Col xs={24} md={8}>
+                <Form.Item label="Method">
+                  <Select
+                    value={(executor as any).method ?? "GET"}
+                    onChange={(val) => updateExecutor({ method: val })}
+                    options={[
+                      { label: "GET", value: "GET" },
+                      { label: "POST", value: "POST" },
+                      { label: "PUT", value: "PUT" },
+                      { label: "PATCH", value: "PATCH" },
+                      { label: "DELETE", value: "DELETE" },
+                    ]}
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item label="Expected Status">
+                  <InputNumber
+                    min={100}
+                    max={599}
+                    style={{ width: "100%" }}
+                    value={((executor as any).expected_status as number[])?.[0] ?? 200}
+                    onChange={(val) => updateExecutor({ expected_status: [val ?? 200] })}
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+          )}
+          <Row gutter={16}>
+            <Col xs={24} md={12}>
+              <Form.Item label="Poll Interval (seconds)">
+                <InputNumber
+                  min={1}
+                  style={{ width: "100%" }}
+                  value={(executor as any).poll_interval_seconds ?? 30}
+                  onChange={(val) => updateExecutor({ poll_interval_seconds: val ?? 30 })}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item label="Timeout (seconds)">
+                <InputNumber
+                  min={1}
+                  style={{ width: "100%" }}
+                  value={(executor as any).timeout_seconds ?? 3600}
+                  onChange={(val) => updateExecutor({ timeout_seconds: val ?? 3600 })}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
         </>
       )}
 
@@ -765,6 +1000,52 @@ export function JobForm({
       {formScheduleMode === "cron" && (
         <>
           <Row gutter={16}>
+            <Col xs={24} md={12}>
+              <Form.Item label="Preset">
+                <Select
+                  placeholder="Choose a preset or type below…"
+                  allowClear
+                  value={[
+                    "*/1 * * * *", "*/5 * * * *", "*/15 * * * *", "*/30 * * * *",
+                    "0 * * * *", "0 0 * * *", "0 6 * * *", "0 0 * * 0", "0 0 1 * *",
+                  ].includes(schedule.cron ?? "") ? schedule.cron : undefined}
+                  onChange={(val: string | undefined) => {
+                    setLastValidation(undefined);
+                    updateSchedule({ cron: val ?? "" });
+                  }}
+                  options={[
+                    { label: "Every minute  (*/1 * * * *)", value: "*/1 * * * *" },
+                    { label: "Every 5 minutes  (*/5 * * * *)", value: "*/5 * * * *" },
+                    { label: "Every 15 minutes  (*/15 * * * *)", value: "*/15 * * * *" },
+                    { label: "Every 30 minutes  (*/30 * * * *)", value: "*/30 * * * *" },
+                    { label: "Hourly  (0 * * * *)", value: "0 * * * *" },
+                    { label: "Daily at midnight  (0 0 * * *)", value: "0 0 * * *" },
+                    { label: "Daily at 6 AM  (0 6 * * *)", value: "0 6 * * *" },
+                    { label: "Weekly (Sunday midnight)  (0 0 * * 0)", value: "0 0 * * 0" },
+                    { label: "Monthly (1st at midnight)  (0 0 1 * *)", value: "0 0 1 * *" },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item label="Timezone">
+                <Select
+                  showSearch
+                  value={schedule.timezone ?? "UTC"}
+                  onChange={(val) => updateSchedule({ timezone: val })}
+                  options={(
+                    typeof Intl !== "undefined" && (Intl as any).supportedValuesOf
+                      ? (Intl as any).supportedValuesOf("timeZone")
+                      : ["UTC", "America/New_York", "America/Chicago", "America/Los_Angeles", "Europe/London", "Europe/Paris", "Asia/Tokyo", "Asia/Shanghai", "Australia/Sydney"]
+                  ).map((tz: string) => ({ label: tz, value: tz }))}
+                  filterOption={(input, option) =>
+                    (option?.label as string ?? "").toLowerCase().includes(input.toLowerCase())
+                  }
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={16}>
             <Col span={24}>
               <Form.Item label="Cron Expression">
                 <Input
@@ -778,7 +1059,10 @@ export function JobForm({
               </Form.Item>
               <Space direction="vertical" size={4} style={{ width: "100%" }}>
                 <Typography.Text type="secondary">
-                  Standard 5-field cron: minute hour day-of-month month day-of-week
+                  Standard 5-field cron: minute hour day-of-month month day-of-week.{" "}
+                  <Typography.Link href="https://crontab.guru" target="_blank" rel="noopener noreferrer">
+                    crontab.guru ↗
+                  </Typography.Link>
                 </Typography.Text>
                 <Button size="small" onClick={handleValidateOnly} loading={validating}>
                   Preview Cron
