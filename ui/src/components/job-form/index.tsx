@@ -282,8 +282,8 @@ export function JobForm({
       shell: { type: "shell", script: "echo 'hello world'", shell: "bash" },
       sql: { type: "sql", dialect: "postgres", query: "SELECT 1;", connection_uri: "", database: "" },
       external: { type: "external", command: "/usr/bin/env" },
-      http: { type: "http", url: "", method: "GET", expected_status: 200 },
-      sensor: { type: "sensor", condition: "", poll_interval: 30, max_wait: 3600 },
+      http: { type: "http", url: "", method: "GET", expected_status: [200], timeout_seconds: 30 },
+      sensor: { type: "sensor", sensor_type: "http", target: "", method: "GET", headers: {}, expected_status: [200], poll_interval_seconds: 30, timeout_seconds: 3600 },
       batch: { type: "batch", script: "echo Hello", shell: "cmd" },
       powershell: { type: "powershell", script: "Write-Output 'Hello'", shell: "pwsh" },
     };
@@ -645,7 +645,7 @@ export function JobForm({
                 <Input
                   value={(executor as any).workdir ?? ""}
                   onChange={(e) => updateExecutor({ workdir: e.target.value || null })}
-                  placeholder="C:\jobs"
+                  placeholder="C:\\jobs"
                 />
               </Form.Item>
             </Col>
@@ -696,8 +696,8 @@ export function JobForm({
                   min={100}
                   max={599}
                   style={{ width: "100%" }}
-                  value={(executor as any).expected_status ?? 200}
-                  onChange={(val) => updateExecutor({ expected_status: val })}
+                  value={((executor as any).expected_status as number[])?.[0] ?? 200}
+                  onChange={(val) => updateExecutor({ expected_status: [val ?? 200] })}
                 />
               </Form.Item>
             </Col>
@@ -707,7 +707,7 @@ export function JobForm({
                   min={1}
                   style={{ width: "100%" }}
                   value={(executor as any).timeout_seconds ?? 30}
-                  onChange={(val) => updateExecutor({ timeout_seconds: val })}
+                  onChange={(val) => updateExecutor({ timeout_seconds: val ?? 30 })}
                 />
               </Form.Item>
             </Col>
@@ -746,32 +746,84 @@ export function JobForm({
 
       {executor.type === "sensor" && (
         <>
-          <Form.Item label="Condition Script" tooltip="Shell script that exits 0 when the condition is met.">
-            <Input.TextArea
-              value={(executor as any).condition ?? ""}
-              onChange={(e) => updateExecutor({ condition: e.target.value })}
-              autoSize={{ minRows: 4 }}
-              placeholder="test -f /tmp/ready.flag"
-            />
-          </Form.Item>
+          <Row gutter={16}>
+            <Col xs={24} md={8}>
+              <Form.Item label="Sensor Type">
+                <Select
+                  value={(executor as any).sensor_type ?? "http"}
+                  onChange={(val) => updateExecutor({ sensor_type: val })}
+                  options={[
+                    { label: "HTTP", value: "http" },
+                    { label: "SQL", value: "sql" },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={16}>
+              <Form.Item
+                label={(executor as any).sensor_type === "sql" ? "Connection URI" : "Target URL"}
+                required
+              >
+                <Input
+                  value={(executor as any).target ?? ""}
+                  onChange={(e) => updateExecutor({ target: e.target.value })}
+                  placeholder={
+                    (executor as any).sensor_type === "sql"
+                      ? "postgresql://user:pass@host:5432/db"
+                      : "https://api.example.com/health"
+                  }
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+          {(executor as any).sensor_type !== "sql" && (
+            <Row gutter={16}>
+              <Col xs={24} md={8}>
+                <Form.Item label="Method">
+                  <Select
+                    value={(executor as any).method ?? "GET"}
+                    onChange={(val) => updateExecutor({ method: val })}
+                    options={[
+                      { label: "GET", value: "GET" },
+                      { label: "POST", value: "POST" },
+                      { label: "PUT", value: "PUT" },
+                      { label: "PATCH", value: "PATCH" },
+                      { label: "DELETE", value: "DELETE" },
+                    ]}
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item label="Expected Status">
+                  <InputNumber
+                    min={100}
+                    max={599}
+                    style={{ width: "100%" }}
+                    value={((executor as any).expected_status as number[])?.[0] ?? 200}
+                    onChange={(val) => updateExecutor({ expected_status: [val ?? 200] })}
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+          )}
           <Row gutter={16}>
             <Col xs={24} md={12}>
               <Form.Item label="Poll Interval (seconds)">
                 <InputNumber
                   min={1}
                   style={{ width: "100%" }}
-                  value={(executor as any).poll_interval ?? 30}
-                  onChange={(val) => updateExecutor({ poll_interval: val })}
+                  value={(executor as any).poll_interval_seconds ?? 30}
+                  onChange={(val) => updateExecutor({ poll_interval_seconds: val ?? 30 })}
                 />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
-              <Form.Item label="Max Wait (seconds)" tooltip="Overall timeout; 0 = use job timeout">
+              <Form.Item label="Timeout (seconds)">
                 <InputNumber
-                  min={0}
+                  min={1}
                   style={{ width: "100%" }}
-                  value={(executor as any).max_wait ?? 3600}
-                  onChange={(val) => updateExecutor({ max_wait: val })}
+                  value={(executor as any).timeout_seconds ?? 3600}
+                  onChange={(val) => updateExecutor({ timeout_seconds: val ?? 3600 })}
                 />
               </Form.Item>
             </Col>
@@ -953,11 +1005,13 @@ export function JobForm({
                 <Select
                   placeholder="Choose a preset or type below…"
                   allowClear
+                  value={[
+                    "*/1 * * * *", "*/5 * * * *", "*/15 * * * *", "*/30 * * * *",
+                    "0 * * * *", "0 0 * * *", "0 6 * * *", "0 0 * * 0", "0 0 1 * *",
+                  ].includes(schedule.cron ?? "") ? schedule.cron : undefined}
                   onChange={(val: string | undefined) => {
-                    if (val) {
-                      setLastValidation(undefined);
-                      updateSchedule({ cron: val });
-                    }
+                    setLastValidation(undefined);
+                    updateSchedule({ cron: val ?? "" });
                   }}
                   options={[
                     { label: "Every minute  (*/1 * * * *)", value: "*/1 * * * *" },

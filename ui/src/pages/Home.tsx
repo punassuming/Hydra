@@ -127,8 +127,29 @@ export function HomePage() {
   };
 
   const handleClone = (job: JobDefinition) => {
-    const { _id: _omit, ...rest } = job as any;
-    setTemplatePayload({ ...rest, name: `${job.name} (copy)` });
+    const { next_run_at: _nra, ...scheduleRest } = (job.schedule ?? {}) as any;
+    const cleanPayload: Partial<JobPayload> = {
+      name: `${job.name} (copy)`,
+      user: job.user || "default",
+      executor: job.executor as JobPayload["executor"],
+      affinity: job.affinity ?? {},
+      schedule: scheduleRest,
+      completion: job.completion ?? {},
+      tags: job.tags ?? [],
+      depends_on: job.depends_on ?? [],
+      retries: job.retries,
+      timeout: job.timeout,
+      bypass_concurrency: job.bypass_concurrency ?? false,
+      priority: (job as any).priority ?? 5,
+      source: job.source ?? null,
+      max_retries: job.max_retries ?? 0,
+      retry_delay_seconds: job.retry_delay_seconds ?? 0,
+      on_failure_webhooks: job.on_failure_webhooks ?? [],
+      on_failure_email_to: job.on_failure_email_to ?? [],
+      on_failure_email_credential_ref: job.on_failure_email_credential_ref ?? "",
+      sla_max_duration_seconds: job.sla_max_duration_seconds ?? null,
+    };
+    setTemplatePayload(cleanPayload);
     setSelectedJobId(null);
     setModalVisible(true);
   };

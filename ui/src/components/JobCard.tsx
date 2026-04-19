@@ -47,9 +47,13 @@ export function JobCard({ job, onRun, onEdit, onClone, selected, compact = false
               <Tooltip title="Edit" key="edit">
                 <EditOutlined onClick={onEdit} />
               </Tooltip>,
-              <Tooltip title="Duplicate" key="clone">
-                <CopyOutlined onClick={onClone} />
-              </Tooltip>,
+              ...(onClone
+                ? [
+                    <Tooltip title="Duplicate" key="clone">
+                      <CopyOutlined onClick={onClone} />
+                    </Tooltip>,
+                  ]
+                : []),
             ]
       }
     >

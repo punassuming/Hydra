@@ -85,7 +85,7 @@ def _load_file(path: str) -> list[dict]:
     return data
 
 
-def _api(method: str, path: str, api_url: str, token: str, body: dict | None = None) -> dict:
+def _api(method: str, path: str, api_url: str, token: str, domain: str, body: dict | None = None) -> dict:
     url = f"{api_url.rstrip('/')}{path}"
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(
@@ -95,6 +95,7 @@ def _api(method: str, path: str, api_url: str, token: str, body: dict | None = N
         headers={
             "Content-Type": "application/json",
             "x-api-key": token,
+            "x-domain": domain,
         },
     )
     try:
@@ -105,10 +106,11 @@ def _api(method: str, path: str, api_url: str, token: str, body: dict | None = N
         raise RuntimeError(f"HTTP {exc.code} {exc.reason} — {body_text}") from exc
 
 
-def _find_job_by_name(name: str, api_url: str, token: str) -> dict | None:
-    results = _api("GET", f"/jobs/?search={urllib.parse.quote(name)}", api_url, token)
+def _find_job_by_name(name: str, domain: str, api_url: str, token: str) -> dict | None:
+    path = f"/jobs/?search={urllib.parse.quote(name)}&domain={urllib.parse.quote(domain)}"
+    results = _api("GET", path, api_url, token, domain)
     for job in results:
-        if job.get("name") == name:
+        if job.get("name") == name and job.get("domain") == domain:
             return job
     return None
 
@@ -134,7 +136,7 @@ def main() -> int:
     if args.dry_run:
         print("[hydra-apply] DRY-RUN mode — no changes will be made.")
 
-    created = updated = unchanged = errors = 0
+    created = updated = errors = 0
 
     for job_def in jobs:
         name = job_def.get("name")
@@ -148,7 +150,7 @@ def main() -> int:
         job_def.setdefault("domain", args.domain)
 
         try:
-            existing = _find_job_by_name(name, args.api_url, args.token)
+            existing = _find_job_by_name(name, args.domain, args.api_url, args.token)
         except RuntimeError as exc:
             print(f"[hydra-apply] ERROR looking up '{name}': {exc}", file=sys.stderr)
             errors += 1
@@ -160,7 +162,7 @@ def main() -> int:
                 print(f"  would update  {name}  (id={job_id})")
             else:
                 try:
-                    _api("PUT", f"/jobs/{job_id}", args.api_url, args.token, job_def)
+                    _api("PUT", f"/jobs/{job_id}", args.api_url, args.token, args.domain, job_def)
                     print(f"  updated       {name}  (id={job_id})")
                     updated += 1
                 except RuntimeError as exc:
@@ -171,7 +173,7 @@ def main() -> int:
                 print(f"  would create  {name}")
             else:
                 try:
-                    result = _api("POST", "/jobs/", args.api_url, args.token, job_def)
+                    result = _api("POST", "/jobs/", args.api_url, args.token, args.domain, job_def)
                     new_id = result.get("_id") or result.get("id", "?")
                     print(f"  created       {name}  (id={new_id})")
                     created += 1
@@ -182,7 +184,7 @@ def main() -> int:
     if args.dry_run:
         print(f"\n[hydra-apply] Dry-run complete: {len(jobs)} job(s) would be processed.")
     else:
-        print(f"\n[hydra-apply] Done. created={created}  updated={updated}  unchanged={unchanged}  errors={errors}")
+        print(f"\n[hydra-apply] Done. created={created}  updated={updated}  errors={errors}")
 
     return 0 if errors == 0 else 1
 
