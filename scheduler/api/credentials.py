@@ -5,7 +5,7 @@ credentials. Secrets are write-only: callers can create, update, and delete
 credentials, but never read back the encrypted payload or sensitive fields.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict
 
 from fastapi import APIRouter, HTTPException, Request
@@ -46,7 +46,7 @@ def create_domain_credential(payload: CredentialCreate, request: Request):
         raise HTTPException(status_code=409, detail="credential with that name already exists in this domain")
     sensitive = payload.model_dump(exclude={"name", "credential_type", "dialect"})
     encrypted = encrypt_payload(sensitive)
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     doc = {
         "_id": f"{domain}:{payload.name}",
         "name": payload.name,
@@ -71,7 +71,7 @@ def update_domain_credential(name: str, payload: CredentialCreate, request: Requ
         raise HTTPException(status_code=404, detail="credential not found")
     sensitive = payload.model_dump(exclude={"name", "credential_type", "dialect"})
     encrypted = encrypt_payload(sensitive)
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     db.credentials.update_one(
         {"name": name, "domain": domain},
         {"$set": {

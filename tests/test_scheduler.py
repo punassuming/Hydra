@@ -4,7 +4,7 @@ from scheduler.models.job_definition import JobDefinition, Affinity, ScheduleCon
 from scheduler.models.executor import ShellExecutor, PythonExecutor
 from scheduler.api.jobs import _validate_job_definition, _build_dependency_graph
 from scheduler.utils.schedule import initialize_schedule, advance_schedule
-from datetime import datetime
+from datetime import datetime, timezone
 from scheduler.models.worker_info import WorkerInfo
 
 
@@ -59,12 +59,12 @@ def test_validation_fails_for_bad_interval():
 
 def test_initialize_interval_schedule_sets_next_run():
     schedule = ScheduleConfig(mode="interval", interval_seconds=60, enabled=True)
-    initialized = initialize_schedule(schedule, datetime.utcnow())
+    initialized = initialize_schedule(schedule, datetime.now(timezone.utc))
     assert initialized.next_run_at is not None
 
 
 def test_advance_schedule_disables_after_end():
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     schedule = ScheduleConfig(mode="interval", interval_seconds=10, enabled=True, next_run_at=now, end_at=now)
     advanced = advance_schedule(schedule)
     assert advanced.next_run_at is None
@@ -340,11 +340,11 @@ def test_handle_artifact_emitted_missing_name(monkeypatch):
 
 def test_sla_miss_fires_alerts():
     """sla_monitoring_loop fires webhooks and email alerts when elapsed > sla_max_duration_seconds."""
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
     from unittest.mock import MagicMock, patch
 
     mock_db = MagicMock()
-    start_ts = datetime.utcnow() - timedelta(seconds=200)
+    start_ts = datetime.now(timezone.utc) - timedelta(seconds=200)
 
     run_doc = {
         "_id": "run-sla-1",
@@ -365,7 +365,7 @@ def test_sla_miss_fires_alerts():
     mock_db.job_runs.update_one.return_value = MagicMock(modified_count=1)
 
     # Verify elapsed time exceeds the SLA limit (core check)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     elapsed = (now - start_ts).total_seconds()
     sla_seconds = job_doc["sla_max_duration_seconds"]
     assert elapsed > sla_seconds
@@ -394,11 +394,11 @@ def test_sla_miss_fires_alerts():
 
 def test_sla_no_miss_when_under_limit():
     """sla_monitoring_loop does NOT fire alerts when elapsed < sla_max_duration_seconds."""
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
     from unittest.mock import MagicMock
 
     mock_db = MagicMock()
-    start_ts = datetime.utcnow() - timedelta(seconds=50)
+    start_ts = datetime.now(timezone.utc) - timedelta(seconds=50)
 
     job_doc = {
         "_id": "job-sla-fast",
@@ -408,8 +408,8 @@ def test_sla_no_miss_when_under_limit():
         "on_failure_email_credential_ref": None,
     }
 
-    now = datetime.utcnow()
-    start_ts_local = datetime.utcnow() - timedelta(seconds=50)
+    now = datetime.now(timezone.utc)
+    start_ts_local = datetime.now(timezone.utc) - timedelta(seconds=50)
     elapsed = (now - start_ts_local).total_seconds()
     sla_seconds = job_doc["sla_max_duration_seconds"]
     # SLA is NOT exceeded

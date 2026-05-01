@@ -7,7 +7,7 @@ live Redis or MongoDB connections.
 
 import json
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, call
 
@@ -34,8 +34,8 @@ def _run_start_payload(run_id="r1", job_id="j1", domain="prod", attempt=1):
         "job_id": job_id,
         "domain": domain,
         "worker_id": "w1",
-        "start_ts": datetime.utcnow().timestamp(),
-        "scheduled_ts": datetime.utcnow().timestamp(),
+        "start_ts": datetime.now(timezone.utc).timestamp(),
+        "scheduled_ts": datetime.now(timezone.utc).timestamp(),
         "attempt": attempt,
     }
 
@@ -47,7 +47,7 @@ def _run_end_payload(run_id="r1", job_id="j1", domain="prod", status="success"):
         "job_id": job_id,
         "domain": domain,
         "worker_id": "w1",
-        "end_ts": datetime.utcnow().timestamp(),
+        "end_ts": datetime.now(timezone.utc).timestamp(),
         "status": status,
         "returncode": 0 if status == "success" else 1,
     }
@@ -138,7 +138,7 @@ class TestHandleRunEndIdempotency:
     re-trigger post-run actions (retries, webhooks) on replay."""
 
     def test_normal_run_end_updates_document(self):
-        existing = {"_id": "r1", "status": "running", "start_ts": datetime.utcnow()}
+        existing = {"_id": "r1", "status": "running", "start_ts": datetime.now(timezone.utc)}
         db = _make_db(existing_doc=existing)
         db.job_runs.update_one.return_value = SimpleNamespace(matched_count=1, upserted_id=None)
 
@@ -155,7 +155,7 @@ class TestHandleRunEndIdempotency:
     def test_duplicate_run_end_for_terminal_run_is_ignored(self):
         """A replayed run_end for a run already in a terminal state must not
         re-trigger post-run actions."""
-        existing = {"_id": "r1", "status": "success", "start_ts": datetime.utcnow()}
+        existing = {"_id": "r1", "status": "success", "start_ts": datetime.now(timezone.utc)}
         db = _make_db(existing_doc=existing)
 
         with patch("scheduler.run_events.get_db", return_value=db), \
@@ -170,7 +170,7 @@ class TestHandleRunEndIdempotency:
 
     def test_duplicate_run_end_for_failed_run_does_not_retry(self):
         """A replayed failed run_end must not enqueue another retry."""
-        existing = {"_id": "r1", "status": "failed", "start_ts": datetime.utcnow()}
+        existing = {"_id": "r1", "status": "failed", "start_ts": datetime.now(timezone.utc)}
         db = _make_db(existing_doc=existing)
 
         with patch("scheduler.run_events.get_db", return_value=db), \

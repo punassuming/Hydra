@@ -3,7 +3,7 @@ import smtplib
 import threading
 import time
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from email.message import EmailMessage
 from typing import Any, Dict
 
@@ -28,7 +28,7 @@ def _to_datetime(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         return value
     if isinstance(value, (int, float)):
-        return datetime.utcfromtimestamp(float(value))
+        return datetime.fromtimestamp(float(value), tz=timezone.utc)
     if isinstance(value, str):
         normalized = value.strip()
         if not normalized:
@@ -208,7 +208,7 @@ def _handle_run_start(payload: Dict[str, Any]):
     if not run_id or not job_id:
         return
 
-    start_ts = _to_datetime(payload.get("start_ts")) or datetime.utcnow()
+    start_ts = _to_datetime(payload.get("start_ts")) or datetime.now(timezone.utc)
     scheduled_ts = _to_datetime(payload.get("scheduled_ts")) or start_ts
     doc = {
         "_id": run_id,
@@ -283,7 +283,7 @@ def _handle_run_end(payload: Dict[str, Any]):
     if not run_id:
         return
 
-    end_ts = _to_datetime(payload.get("end_ts")) or datetime.utcnow()
+    end_ts = _to_datetime(payload.get("end_ts")) or datetime.now(timezone.utc)
     existing = db.job_runs.find_one({"_id": run_id}, {"start_ts": 1, "status": 1})
     start_ts = _to_datetime((existing or {}).get("start_ts")) or _to_datetime(payload.get("start_ts"))
     duration = (end_ts - start_ts).total_seconds() if start_ts else None
@@ -446,7 +446,7 @@ def _handle_artifact_emitted(payload: Dict[str, Any]):
         log.warning("artifact_emitted event missing artifact_name; skipping")
         return
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     db.artifacts.update_one(
         {"domain": domain, "name": artifact_name},
         {

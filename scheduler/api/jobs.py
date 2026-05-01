@@ -1,4 +1,4 @@
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from typing import List, Dict, Any, Optional
 import json
 import os
@@ -143,7 +143,7 @@ def _validate_job_definition(job: JobDefinition) -> JobValidationResult:
         errors.append("executor.type must be one of python|shell|batch|powershell|sql|external|sensor")
 
     try:
-        next_run_at = initialize_schedule(job.schedule, datetime.utcnow()).next_run_at
+        next_run_at = initialize_schedule(job.schedule, datetime.now(timezone.utc)).next_run_at
     except ValueError as exc:
         errors.append(str(exc))
 
@@ -160,10 +160,10 @@ def _attach_schedule(job_def: JobDefinition, force: bool = False) -> JobDefiniti
     if not needs_init:
         return job_def
     try:
-        new_schedule = initialize_schedule(schedule, datetime.utcnow())
+        new_schedule = initialize_schedule(schedule, datetime.now(timezone.utc))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=[str(exc)])
-    return job_def.copy(update={"schedule": new_schedule})
+    return job_def.model_copy(update={"schedule": new_schedule})
 
 
 @router.get("/jobs/templates")
@@ -280,7 +280,7 @@ def update_job(job_id: str, updates: JobUpdate, request: Request):
     if not update_doc:
         raise HTTPException(status_code=400, detail="no fields to update")
     merged = {**existing, **update_doc}
-    merged["updated_at"] = datetime.utcnow()
+    merged["updated_at"] = datetime.now(timezone.utc)
     job_def = JobDefinition.model_validate(merged)
     validation = _validate_job_definition(job_def)
     if not validation.valid:
@@ -609,7 +609,7 @@ def queue_overview(request: Request):
                     "schedule_mode": ((job or {}).get("schedule") or {}).get("mode", "immediate"),
                     "next_run_at": _serialize_ts(((job or {}).get("schedule") or {}).get("next_run_at")),
                     "queue_score": score,
-                    "enqueued_ts": _serialize_ts(datetime.utcfromtimestamp(float(enqueued_ts))) if enqueued_ts else None,
+                    "enqueued_ts": _serialize_ts(datetime.fromtimestamp(float(enqueued_ts), tz=timezone.utc)) if enqueued_ts else None,
                     "reason": meta.get("reason"),
                     "no_worker_count": int(meta.get("no_worker_count", 0)),
                 }

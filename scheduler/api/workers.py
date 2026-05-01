@@ -1,7 +1,7 @@
 import json
 import time
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Request, HTTPException
 from typing import List
 from pydantic import BaseModel
@@ -303,7 +303,7 @@ def worker_timeline(worker_id: str, request: Request):
     domain, _key, data = _resolve_worker_key(request, worker_id)
     minutes = max(5, min(int(request.query_params.get("minutes", "180")), 1440))
     limit = max(50, min(int(request.query_params.get("limit", "800")), 2000))
-    since = datetime.utcnow() - timedelta(minutes=minutes)
+    since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
 
     runs = list(
         db.job_runs.find(
@@ -319,7 +319,7 @@ def worker_timeline(worker_id: str, request: Request):
         for doc in db.job_definitions.find({"_id": {"$in": job_ids}}, {"_id": 1, "name": 1})
     }
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     entries = []
     for doc in runs:
         start_ts = doc.get("start_ts")
