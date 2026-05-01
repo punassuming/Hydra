@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 import uuid
@@ -36,7 +36,7 @@ class ScheduleConfig(BaseModel):
                 if not croniter.is_valid(self.cron):
                     raise ValueError("invalid cron syntax")
                 # Force parser execution so parser-specific diagnostics surface.
-                croniter(self.cron, datetime.utcnow()).get_next(datetime)
+                croniter(self.cron, datetime.now(timezone.utc)).get_next(datetime)
             except Exception as exc:
                 raise ValueError(f"Invalid cron expression '{self.cron}': {exc}") from exc
         return self
@@ -86,8 +86,8 @@ class JobDefinition(BaseModel):
     on_failure_email_credential_ref: Optional[str] = None
     triggers_on_artifacts: List[str] = Field(default_factory=list)
     sla_max_duration_seconds: Optional[int] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     model_config = ConfigDict(populate_by_name=True)
 

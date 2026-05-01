@@ -1,7 +1,7 @@
 import os
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Tuple
 
 from ..redis_client import get_redis
@@ -69,7 +69,7 @@ def requeue_jobs_for_worker(domain_and_worker: str):
                     "$set": {
                         "status": "failed",
                         "completion_reason": "worker offline; job requeued",
-                        "end_ts": datetime.utcnow(),
+                        "end_ts": datetime.now(timezone.utc),
                     }
                 },
             )

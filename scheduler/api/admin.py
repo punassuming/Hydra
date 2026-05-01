@@ -3,7 +3,7 @@ from typing import List, Dict
 import secrets
 import hashlib
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from ..redis_client import get_redis
 from ..mongo_client import get_db
 from ..examples.templates import TEMPLATES
@@ -234,7 +234,7 @@ def create_credential(payload: CredentialCreate, request: Request):
         raise HTTPException(status_code=409, detail="credential with that name already exists in this domain")
     sensitive = payload.model_dump(exclude={"name", "credential_type", "dialect"})
     encrypted = encrypt_payload(sensitive)
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     doc = {
         "_id": f"{cred_domain}:{payload.name}",
         "name": payload.name,
@@ -259,7 +259,7 @@ def update_credential(name: str, payload: CredentialCreate, request: Request):
         raise HTTPException(status_code=404, detail="credential not found")
     sensitive = payload.model_dump(exclude={"name", "credential_type", "dialect"})
     encrypted = encrypt_payload(sensitive)
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     db.credentials.update_one(
         {"name": name, "domain": cred_domain},
         {"$set": {

@@ -3,7 +3,7 @@ import threading
 import time
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List
 
 from pymongo import ReturnDocument
@@ -393,7 +393,7 @@ def schedule_trigger_loop(stop_event: threading.Event):
     log.info("Schedule trigger loop started")
     while not stop_event.is_set():
         try:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             domains = list(r.smembers("hydra:domains") or []) or ["prod"]
             for domain in domains:
                 due_jobs = db.job_definitions.find(
@@ -444,7 +444,7 @@ def sla_monitoring_loop(stop_event: threading.Event):
     log.info("SLA monitoring loop started")
     while not stop_event.is_set():
         try:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             cursor = db.job_runs.find(
                 {"status": "running", "sla_miss_alerted": {"$ne": True}},
                 {"_id": 1, "job_id": 1, "domain": 1, "start_ts": 1},

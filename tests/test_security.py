@@ -181,7 +181,7 @@ def test_admin_token_uses_constant_time_comparison():
         call_next = AsyncMock(return_value=MagicMock())
 
         import asyncio
-        asyncio.get_event_loop().run_until_complete(enforce_api_key(request, call_next))
+        asyncio.run(enforce_api_key(request, call_next))
 
         assert request.state.is_admin is True
         assert call_next.called
@@ -206,7 +206,7 @@ def test_no_admin_token_env_rejects_unauthenticated():
         call_next = AsyncMock(return_value=MagicMock())
 
         import asyncio
-        resp = asyncio.get_event_loop().run_until_complete(enforce_api_key(request, call_next))
+        resp = asyncio.run(enforce_api_key(request, call_next))
 
         # call_next should NOT have been called
         assert not call_next.called
