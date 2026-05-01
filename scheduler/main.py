@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -32,7 +33,40 @@ log = setup_logging("scheduler.main")
 #
 HYDRA_MODE = os.getenv("HYDRA_MODE", "combined")
 
-app = FastAPI(title="hydra-jobs scheduler")
+# Module-level orchestrator instance — set during startup when running in combined mode.
+_orchestrator: OrchestratorManager | None = None
+
+
+def on_startup():
+    global _orchestrator
+    ensure_admin_token()
+    warn_credential_encryption_key()
+    ensure_domains_seeded()
+    if HYDRA_MODE == "api":
+        log.info(
+            "HYDRA_MODE=api: API service started without orchestration loops. "
+            "Run 'python -m scheduler.orchestrator_entrypoint' for the control-plane."
+        )
+    else:
+        log.info("HYDRA_MODE=%s: starting orchestration loops alongside API", HYDRA_MODE)
+        _orchestrator = create_standard_orchestrator()
+        _orchestrator.start()
+
+
+def on_shutdown():
+    if _orchestrator is not None:
+        log.info("Stopping orchestration loops")
+        _orchestrator.stop()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    on_startup()
+    yield
+    on_shutdown()
+
+
+app = FastAPI(title="hydra-jobs scheduler", lifespan=lifespan)
 app.middleware("http")(enforce_api_key)
 
 cors_env = os.getenv("CORS_ALLOW_ORIGINS", "*")
@@ -56,30 +90,3 @@ app.include_router(admin_router)
 app.include_router(credentials_router)
 app.include_router(domain_router)
 app.include_router(ai_router)
-
-# Module-level orchestrator instance — set during startup when running in combined mode.
-_orchestrator: OrchestratorManager | None = None
-
-
-@app.on_event("startup")
-def on_startup():
-    global _orchestrator
-    ensure_admin_token()
-    warn_credential_encryption_key()
-    ensure_domains_seeded()
-    if HYDRA_MODE == "api":
-        log.info(
-            "HYDRA_MODE=api: API service started without orchestration loops. "
-            "Run 'python -m scheduler.orchestrator_entrypoint' for the control-plane."
-        )
-    else:
-        log.info("HYDRA_MODE=%s: starting orchestration loops alongside API", HYDRA_MODE)
-        _orchestrator = create_standard_orchestrator()
-        _orchestrator.start()
-
-
-@app.on_event("shutdown")
-def on_shutdown():
-    if _orchestrator is not None:
-        log.info("Stopping orchestration loops")
-        _orchestrator.stop()

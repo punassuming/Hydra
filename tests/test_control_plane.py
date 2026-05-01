@@ -267,7 +267,7 @@ class TestHydraModeIntegration(unittest.TestCase):
              "import importlib; import scheduler.main as m; importlib.reload(m); "
              "print(m.HYDRA_MODE)"],
             capture_output=True, text=True, timeout=10,
-            cwd="/home/runner/work/Hydra/Hydra",
+            cwd=str(__import__("pathlib").Path(__file__).parent.parent),
             env={k: v for k, v in __import__("os").environ.items() if k != "HYDRA_MODE"},
         )
         self.assertIn("combined", result.stdout.strip(), result.stderr)

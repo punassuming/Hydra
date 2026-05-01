@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from croniter import croniter
@@ -17,7 +17,7 @@ def _clamp_to_window(candidate: Optional[datetime], schedule: ScheduleConfig) ->
 def initialize_schedule(schedule: ScheduleConfig, now: datetime) -> ScheduleConfig:
     """Ensure schedule.next_run_at is set for cron/interval modes."""
     if not schedule.enabled or schedule.mode == "immediate":
-        return schedule.copy(update={"next_run_at": None})
+        return schedule.model_copy(update={"next_run_at": None})
 
     if schedule.mode == "cron":
         base = schedule.start_at or now
@@ -32,15 +32,15 @@ def initialize_schedule(schedule: ScheduleConfig, now: datetime) -> ScheduleConf
         next_run = start if start > now else now
 
     next_run = _clamp_to_window(next_run, schedule)
-    return schedule.copy(update={"next_run_at": next_run})
+    return schedule.model_copy(update={"next_run_at": next_run})
 
 
 def advance_schedule(schedule: ScheduleConfig) -> ScheduleConfig:
     """Advance schedule.next_run_at after a run dispatch."""
     if not schedule.enabled or schedule.mode == "immediate":
-        return schedule.copy(update={"next_run_at": None})
+        return schedule.model_copy(update={"next_run_at": None})
 
-    last_run = schedule.next_run_at or datetime.utcnow()
+    last_run = schedule.next_run_at or datetime.now(timezone.utc)
 
     if schedule.mode == "cron":
         if not schedule.cron:
@@ -53,5 +53,5 @@ def advance_schedule(schedule: ScheduleConfig) -> ScheduleConfig:
 
     next_run = _clamp_to_window(next_run, schedule)
     if next_run is None:
-        return schedule.copy(update={"next_run_at": None, "enabled": False})
-    return schedule.copy(update={"next_run_at": next_run})
+        return schedule.model_copy(update={"next_run_at": None, "enabled": False})
+    return schedule.model_copy(update={"next_run_at": next_run})
